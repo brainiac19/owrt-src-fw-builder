@@ -28,6 +28,11 @@ on:
         required: false
         type: boolean
         default: true
+      debug:
+        description: 'Enable debug logging'
+        required: false
+        type: boolean
+        default: false
   # schedule:
   #   - cron: '0 0 * * 0'  # Weekly, midnight Sunday UTC
 
@@ -271,12 +276,16 @@ jobs:
               builder load-config --profile ${{ matrix.profile }} && \
               builder compile --profile ${{ matrix.profile }} \
                 ${{ github.event.inputs.fallback_single_core == 'true' && '--fallback' || '' }} \
-                ${{ github.event.inputs.enable_ccache == 'true' && '--ccache' || '' }} && \
+                ${{ github.event.inputs.enable_ccache == 'true' && '--ccache' || '' }} \
+                ${{ github.event.inputs.debug == 'true' && '--debug' || '' }} \
+                --log-to /builder/artifacts/${{ matrix.profile }}/build.log && \
               builder export-artifacts --profile ${{ matrix.profile }}"
 
       - name: Compress and Password Protect Artifacts
+        if: always()
         run: |
           mkdir -p protected_artifacts
+          mkdir -p artifacts/${{ matrix.profile }}
           cd artifacts/${{ matrix.profile }}
           if [ -n "$BUILD_PASSWORD" ]; then
             7z a -t7z -p"$BUILD_PASSWORD" -mhe=on -mx=5 -m0=lzma2 ../../protected_artifacts/firmware-${{ matrix.profile }}.7z .
@@ -288,6 +297,7 @@ jobs:
           BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
 
       - name: Upload Firmware Artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: firmware-${{ matrix.profile }}-${{ github.run_number }}

@@ -35,15 +35,15 @@ echo "ccache max size: $(ccache -p | grep max_size | awk '{print $NF}')"
 
 mkdir -p /builder/dl
 echo "Downloading package dependencies using $(nproc) cores..."
-make download -j"$(nproc)" DL_DIR=/builder/dl
+make download -j"$(nproc)" DL_DIR=/builder/dl 2>&1 | python3 "$BUILDER_ROOT/scripts/engine/filter_logs.py"
 
 echo "Compiling firmware using $(nproc) cores..."
-if ! make -j"$(nproc)" DL_DIR=/builder/dl; then
+if ! make -j"$(nproc)" DL_DIR=/builder/dl 2>&1 | python3 "$BUILDER_ROOT/scripts/engine/filter_logs.py"; then
     if [[ "$FALLBACK_SINGLE_CORE" == "1" ]]; then
         echo "==========================================================="
         echo "Build failed with $(nproc) cores! Falling back to single core..."
         echo "==========================================================="
-        if ! make -C "$WORKTREE_DIR" -j1 V=s DL_DIR=/builder/dl; then
+        if ! make -C "$WORKTREE_DIR" -j1 V=s DL_DIR=/builder/dl 2>&1 | python3 "$BUILDER_ROOT/scripts/engine/filter_logs.py"; then
             echo "==========================================================="
             echo "Single core build also failed!"
             echo "==========================================================="
