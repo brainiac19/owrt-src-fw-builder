@@ -97,7 +97,7 @@ jobs:
           path: profiles
 
       - name: Install Dependencies
-        run: sudo apt-get update && sudo apt-get install -y age zstd p7zip-full
+        run: sudo apt-get update && sudo apt-get install -y zstd p7zip-full
 
       # ── Restore caches ────────────────────────────────────────────────────────
       # Split restore/save is the current recommended pattern replacing save-always.
@@ -108,7 +108,7 @@ jobs:
         id: cache-source
         uses: actions/cache/restore@v4
         with:
-          path: source-main.tar.zst.age
+          path: source-main.tar.zst.enc
           key: openwrt-source-main-${{ github.run_id }}
           restore-keys: |
             openwrt-source-main-
@@ -116,17 +116,17 @@ jobs:
       - name: Decrypt and Extract Source Cache
         if: steps.cache-source.outputs.cache-hit == 'true'
         run: |
-          if [ -f source-main.tar.zst.age ]; then
-            age -d source-main.tar.zst.age | tar -x -I 'zstd -T0'
+          if [ -f source-main.tar.zst.enc ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -in source-main.tar.zst.enc | tar -x -I 'zstd -T0'
           fi
         env:
-          AGE_PASSPHRASE: ${{ secrets.BUILD_PASSWORD }}
+          BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
 
       - name: Restore Download Directory Cache
         id: cache-dl
         uses: actions/cache/restore@v4
         with:
-          path: dl.tar.zst.age
+          path: dl.tar.zst.enc
           # DL tarballs are profile-agnostic; fall back to any dl cache
           key: openwrt-dl-${{ matrix.profile }}-${{ hashFiles(format('profiles/{0}/profile.toml', matrix.profile)) }}
           restore-keys: |
@@ -135,18 +135,18 @@ jobs:
       - name: Decrypt and Extract Download Cache
         if: steps.cache-dl.outputs.cache-hit == 'true'
         run: |
-          if [ -f dl.tar.zst.age ]; then
-            age -d dl.tar.zst.age | tar -x -I 'zstd -T0'
+          if [ -f dl.tar.zst.enc ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -in dl.tar.zst.enc | tar -x -I 'zstd -T0'
           fi
         env:
-          AGE_PASSPHRASE: ${{ secrets.BUILD_PASSWORD }}
+          BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
 
       - name: Restore ccache
         id: cache-ccache
         if: github.event.inputs.enable_ccache == 'true'
         uses: actions/cache/restore@v4
         with:
-          path: ccache.tar.zst.age
+          path: ccache.tar.zst.enc
           key: openwrt-ccache-${{ matrix.profile }}-${{ github.run_id }}
           restore-keys: |
             openwrt-ccache-${{ matrix.profile }}-
@@ -154,11 +154,11 @@ jobs:
       - name: Decrypt and Extract ccache
         if: steps.cache-ccache.outputs.cache-hit == 'true'
         run: |
-          if [ -f ccache.tar.zst.age ]; then
-            age -d ccache.tar.zst.age | tar -x -I 'zstd -T0'
+          if [ -f ccache.tar.zst.enc ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -in ccache.tar.zst.enc | tar -x -I 'zstd -T0'
           fi
         env:
-          AGE_PASSPHRASE: ${{ secrets.BUILD_PASSWORD }}
+          BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
 
       # Docker image: use BuildKit inline layer cache instead of a tar blob.
       # This avoids storing a multi-GB tar in the 10 GB repo cache quota.
@@ -195,15 +195,15 @@ jobs:
 
       - name: Compress and Encrypt Source Cache
         if: steps.cache-source.outputs.cache-hit != 'true'
-        run: tar -c -I 'zstd -T0 -3' source/main/ | age -p -o source-main.tar.zst.age
+        run: tar -c -I 'zstd -T0 -3' source/main/ | openssl enc -e -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -out source-main.tar.zst.enc
         env:
-          AGE_PASSPHRASE: ${{ secrets.BUILD_PASSWORD }}
+          BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
 
       - name: Save OpenWrt Source Cache
         if: steps.cache-source.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: source-main.tar.zst.age
+          path: source-main.tar.zst.enc
           key: ${{ steps.cache-source.outputs.cache-primary-key }}
 
       - name: Calculate Toolchain Cache Hash
@@ -228,7 +228,7 @@ jobs:
       - name: Restore Toolchain from GHCR
         id: toolchain-restore
         env:
-          AGE_PASSPHRASE: ${{ secrets.BUILD_PASSWORD }}
+          BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
         run: |
           PROFILE="${{ matrix.profile }}"
           WORKTREE="source/worktrees/${PROFILE}"
@@ -242,9 +242,9 @@ jobs:
             docker create --name tc-seed "${TOOLCHAIN_IMAGE}"
 
             # Extract the encrypted archive and decrypt it directly into the worktree
-            docker cp tc-seed:/toolchain/toolchain-cache.tar.zst.age /tmp/
-            age -d /tmp/toolchain-cache.tar.zst.age | tar -x -I 'zstd -T0' -C "${WORKTREE}"
-            rm /tmp/toolchain-cache.tar.zst.age
+            docker cp tc-seed:/toolchain/toolchain-cache.tar.zst.enc /tmp/
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -in /tmp/toolchain-cache.tar.zst.enc | tar -x -I 'zstd -T0' -C "${WORKTREE}"
+            rm /tmp/toolchain-cache.tar.zst.enc
 
             docker rm tc-seed
 
@@ -313,16 +313,16 @@ jobs:
         if: always() && github.event.inputs.enable_ccache == 'true'
         run: |
           if [ -d .ccache/ ]; then
-            tar -c -I 'zstd -T0 -3' .ccache/ | age -p -o ccache.tar.zst.age
+            tar -c -I 'zstd -T0 -3' .ccache/ | openssl enc -e -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -out ccache.tar.zst.enc
           fi
         env:
-          AGE_PASSPHRASE: ${{ secrets.BUILD_PASSWORD }}
+          BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
 
       - name: Save ccache
         if: always() && github.event.inputs.enable_ccache == 'true'
         uses: actions/cache/save@v4
         with:
-          path: ccache.tar.zst.age
+          path: ccache.tar.zst.enc
           key: openwrt-ccache-${{ matrix.profile }}-${{ github.run_id }}
 
       - name: Delete ccache Directory
@@ -333,16 +333,16 @@ jobs:
         if: always()
         run: |
           if [ -d dl/ ]; then
-            tar -c -I 'zstd -T0 -3' dl/ | age -p -o dl.tar.zst.age
+            tar -c -I 'zstd -T0 -3' dl/ | openssl enc -e -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -out dl.tar.zst.enc
           fi
         env:
-          AGE_PASSPHRASE: ${{ secrets.BUILD_PASSWORD }}
+          BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
 
       - name: Save Download Directory Cache
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: dl.tar.zst.age
+          path: dl.tar.zst.enc
           key: ${{ steps.cache-dl.outputs.cache-primary-key }}
 
       - name: Delete Download Cache Directory
@@ -352,7 +352,7 @@ jobs:
       - name: Save Toolchain to GHCR
         if: success() && env.TOOLCHAIN_RESTORED != 'true'
         env:
-          AGE_PASSPHRASE: ${{ secrets.BUILD_PASSWORD }}
+          BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
         run: |
           PROFILE="${{ matrix.profile }}"
           WORKTREE="source/worktrees/${PROFILE}"
@@ -364,15 +364,15 @@ jobs:
                 staging_dir/toolchain-* \
                 staging_dir/host \
                 build_dir/toolchain-* \
-              2>/dev/null || true) | age -p -o /tmp/toolchain-cache.tar.zst.age
+              2>/dev/null || true) | openssl enc -e -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -out /tmp/toolchain-cache.tar.zst.enc
           cd -
 
           echo "==> Building data image..."
           mkdir /tmp/toolchain-build-ctx
-          mv /tmp/toolchain-cache.tar.zst.age /tmp/toolchain-build-ctx/
+          mv /tmp/toolchain-cache.tar.zst.enc /tmp/toolchain-build-ctx/
           cat > /tmp/toolchain-build-ctx/Dockerfile << 'DOCKERFILE'
           FROM scratch
-          COPY toolchain-cache.tar.zst.age /toolchain/
+          COPY toolchain-cache.tar.zst.enc /toolchain/
           DOCKERFILE
 
           docker build \
