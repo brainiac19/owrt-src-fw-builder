@@ -1,6 +1,6 @@
 # Firmware Builder Design Overview
 
-Welcome to the Universal OpenWrt/ImmortalWrt Firmware Builder! This document provides a simplified overview of how the tool works and how to use it. If you want a deep dive into the architectural reasoning, check out `IMPLEMENTATION.md`.
+Welcome to the Universal OpenWrt Firmware Builder! This document provides a simplified overview of how the tool works and how to use it. If you want a deep dive into the architectural reasoning, check out `IMPLEMENTATION.md`.
 
 ## Core Philosophy
 
@@ -108,7 +108,7 @@ This repository includes a robust GitHub Actions workflow (`.github/workflows/bu
 
 The CI workflow is designed around strict security and decoupling:
 - **Decoupled Profiles:** The builder expects device profiles to be hosted in a separate repository (configured via `PROFILES_REPO` and `PROFILES_PAT` secrets). This keeps the builder engine completely agnostic and public, while your device configurations remain private.
-- **Manual Triggering:** Go to the "Actions" tab on GitHub, select "Build ImmortalWrt", and click "Run workflow". You can enter `all` to build the entire matrix, or type a specific profile slug (like `generic-x86`) to only spin up runners for that specific device!
+- **Manual Triggering:** Go to the "Actions" tab on GitHub, select "Build OpenWrt", and click "Run workflow". You can enter `all` to build the entire matrix, or type a specific profile slug (like `generic-x86`) to only spin up runners for that specific device!
 - **Encrypted Caches:** To prevent leaks of custom packages or proprietary code through public GitHub Actions caches, the workflow compresses and heavily encrypts the `source`, `dl`, and `ccache` caches using `age` and a secure `BUILD_PASSWORD`.
 - **Toolchain Caching:** To bypass slow GitHub cache restoration, the compiled toolchain is packed into a Docker image and pushed to GHCR, making subsequent rebuilds astonishingly fast.
 - **Encrypted Artifacts:** The final firmware images are compressed and encrypted with a password via 7-zip before being uploaded as artifacts.

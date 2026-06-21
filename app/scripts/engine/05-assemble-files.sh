@@ -31,3 +31,11 @@ fi
 if [ -d "/builder/uci-defaults-extra" ]; then
     cp -r /builder/uci-defaults-extra/* "$STAGING_DIR/etc/uci-defaults/" 2>/dev/null || true
 fi
+
+# Ensure all scripts in init.d and uci-defaults are executable
+if [ -d "$STAGING_DIR/etc/uci-defaults" ]; then
+    find "$STAGING_DIR/etc/uci-defaults" -type f -exec chmod +x {} + 2>/dev/null || true
+fi
+if [ -d "$STAGING_DIR/etc/init.d" ]; then
+    find "$STAGING_DIR/etc/init.d" -type f -exec chmod +x {} + 2>/dev/null || true
+fi

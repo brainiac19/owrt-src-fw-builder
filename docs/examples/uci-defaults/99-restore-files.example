@@ -1,6 +1,0 @@
-#!/bin/sh
-tar -xzvf /bak.tar.gz -C /
-rm -f /bak.tar.gz
-bash /root/scripts/init_setup.sh
-printf '%s\n%s\n' '123456' '123456' | passwd root
-

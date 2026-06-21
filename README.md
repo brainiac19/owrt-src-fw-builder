@@ -1,6 +1,6 @@
 # Owrt Firmware Builder
 
-A robust, containerized builder for compiling custom OpenWrt/ImmortalWrt firmware. It keeps your custom configuration separate from the upstream source, allowing you to easily update base versions without dealing with massive git conflicts.
+A robust, containerized builder for compiling custom OpenWrt firmware. It keeps your custom configuration separate from the upstream source, allowing you to easily update base versions without dealing with massive git conflicts.
 
 For a deeper overview of the architecture and design, please read [design.md](design.md).
 
@@ -54,7 +54,7 @@ You need to configure the following repository secrets:
 ### Triggering Builds
 
 1. Go to the **Actions** tab on your GitHub repository.
-2. Select the **Build ImmortalWrt** workflow.
+2. Select the **Build OpenWrt** workflow.
 3. Click **Run workflow**.
 4. You can specify a single profile slug (e.g., `generic-x86`) or leave it as `all` to build all available profiles dynamically.
 

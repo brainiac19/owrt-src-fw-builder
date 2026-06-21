@@ -1,4 +1,4 @@
-name: Build ImmortalWrt
+name: Build OpenWrt
 
 on:
   # push:
