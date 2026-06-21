@@ -55,6 +55,10 @@ EOF
     if [ "$CHANGED" -eq 1 ]; then
         echo "  -> Bucket $b changed. Compressing..."
         tar -c -I 'zstd -T0 -3' -C .ccache "$b" | openssl enc -e -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -out "/tmp/ccache-ctx/$b.tar.zst.enc"
+        
+        # DELETE raw uncompressed bucket immediately after compression
+        rm -rf ".ccache/$b"
+
         echo "COPY $b.tar.zst.enc /cache/" >> /tmp/ccache-ctx/Dockerfile
         
         # Build layer
@@ -64,12 +68,12 @@ EOF
         rm -f "/tmp/ccache-ctx/$b.tar.zst.enc"
     else
         echo "  -> Bucket $b unchanged. Reusing layer..."
+        # DELETE raw uncompressed bucket
+        rm -rf ".ccache/$b"
+
         echo "COPY --from=$IMAGE_NAME /cache/$b.tar.zst.enc /cache/" >> /tmp/ccache-ctx/Dockerfile
         docker build -t "temp-ccache:$i" /tmp/ccache-ctx
     fi
-
-    # DELETE raw uncompressed bucket immediately
-    rm -rf ".ccache/$b"
     
     i=$((i+1))
 done

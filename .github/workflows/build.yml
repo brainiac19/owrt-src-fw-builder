@@ -247,6 +247,12 @@ jobs:
             python3 app/scripts/engine/prune-dl.py
           fi
 
+      - name: Pack and Push Download Cache (GHCR)
+        if: always()
+        env:
+          BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
+        run: ./app/scripts/engine/pack-dl.sh "$DL_IMAGE"
+
       - name: Mark Build Start for ccache
         run: touch .build-start
 
@@ -290,6 +296,12 @@ jobs:
 
       # ── Save caches (always run, even on build failure) ───────────────────────
 
+      - name: Pack and Push Source Cache (GHCR)
+        if: always()
+        env:
+          BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
+        run: ./app/scripts/engine/pack-source.sh "$SOURCE_IMAGE"
+
       - name: Purge Unneeded Build Artifacts
         if: always()
         run: |
@@ -302,18 +314,6 @@ jobs:
           rm -rf "${WORKTREE}/build_dir/host"* || true
           rm -rf "${WORKTREE}/staging_dir/target-"* || true
           rm -rf "${WORKTREE}/staging_dir/hostpkg" || true
-
-      - name: Pack and Push Source Cache (GHCR)
-        if: always()
-        env:
-          BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
-        run: ./app/scripts/engine/pack-source.sh "$SOURCE_IMAGE"
-
-      - name: Pack and Push Download Cache (GHCR)
-        if: always()
-        env:
-          BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
-        run: ./app/scripts/engine/pack-dl.sh "$DL_IMAGE"
 
       - name: Pack and Push ccache (GHCR)
         if: always() && github.event.inputs.enable_ccache == 'true'
@@ -341,6 +341,10 @@ jobs:
                 staging_dir/host \
                 build_dir/toolchain-* \
               2>/dev/null || true) | openssl enc -e -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -out /tmp/toolchain-cache.tar.zst.enc
+          
+          echo "==> Removing raw toolchain directories to free space..."
+          rm -rf staging_dir/toolchain-* staging_dir/host build_dir/toolchain-* || true
+          
           cd -
 
           echo "==> Building data image..."

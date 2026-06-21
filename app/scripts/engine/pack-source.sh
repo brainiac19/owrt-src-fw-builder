@@ -45,18 +45,22 @@ EOF
 if [ "$CHANGED" -eq 1 ]; then
     echo "  -> Source changed (or new image). Compressing..."
     tar -c -I 'zstd -T0 -3' -C source main | openssl enc -e -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -out /tmp/source-ctx/source-main.tar.zst.enc
+    
+    # Aggressive pruning immediately after compression
+    rm -rf source/main
+
     echo "COPY source-main.tar.zst.enc /cache/" >> /tmp/source-ctx/Dockerfile
     
     docker build -t "temp-source:1" /tmp/source-ctx
     rm -f /tmp/source-ctx/source-main.tar.zst.enc
 else
     echo "  -> Source unchanged. Reusing layer..."
+    # Aggressive pruning immediately
+    rm -rf source/main
+
     echo "COPY --from=$IMAGE_NAME /cache/source-main.tar.zst.enc /cache/" >> /tmp/source-ctx/Dockerfile
     docker build -t "temp-source:1" /tmp/source-ctx
 fi
-
-# Aggressive pruning
-rm -rf source/main
 
 echo "==> Tagging and pushing final image..."
 docker tag "temp-source:1" "$IMAGE_NAME"

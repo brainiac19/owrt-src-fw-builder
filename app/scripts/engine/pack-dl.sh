@@ -34,7 +34,7 @@ for f in dl/*; do
     fi
     
     mkdir -p "/tmp/dl-chunks/$chunk"
-    mv "$f" "/tmp/dl-chunks/$chunk/"
+    ln "$f" "/tmp/dl-chunks/$chunk/" 2>/dev/null || cp "$f" "/tmp/dl-chunks/$chunk/"
 done
 
 docker pull busybox:1 2>/dev/null || true
