@@ -39,7 +39,7 @@ for b in $(ls -A .ccache 2>/dev/null); do
         if [[ "$b" == *stats* ]]; then
             CHANGED=1
         else
-            NEWER_FILES=$(find ".ccache/$b" -type f -not -name "*stats*" -newer .build-start 2>/dev/null | head -n 1)
+            NEWER_FILES=$(find ".ccache/$b" -type f -not -name "*stats*" -newer .build-start -print -quit 2>/dev/null)
             if [ -n "$NEWER_FILES" ]; then
                 CHANGED=1
             fi

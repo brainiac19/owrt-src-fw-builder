@@ -304,29 +304,6 @@ jobs:
           BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
         run: ./app/scripts/engine/pack-source.sh "$SOURCE_IMAGE"
 
-      - name: Purge Unneeded Build Artifacts
-        if: always()
-        run: |
-          PROFILE="${{ matrix.profile }}"
-          WORKTREE="source/worktrees/${PROFILE}"
-          echo "==> Purging target build artifacts to free disk space..."
-          rm -rf source/main || true
-          rm -rf "${WORKTREE}/bin" || true
-          rm -rf "${WORKTREE}/build_dir/target-"* || true
-          rm -rf "${WORKTREE}/build_dir/host"* || true
-          rm -rf "${WORKTREE}/staging_dir/target-"* || true
-          rm -rf "${WORKTREE}/staging_dir/hostpkg" || true
-
-      - name: Pack and Push ccache (GHCR)
-        if: always() && github.event.inputs.enable_ccache == 'true'
-        env:
-          BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
-        run: ./app/scripts/engine/pack-ccache.sh "$CCACHE_IMAGE"
-
-      - name: Delete Raw Cache Directories
-        if: always()
-        run: rm -rf dl/ .ccache/ source/main/ || true
-
       - name: Save Toolchain to GHCR
         if: success() && env.TOOLCHAIN_RESTORED != 'true'
         env:
@@ -342,10 +319,11 @@ jobs:
                 staging_dir/toolchain-* \
                 staging_dir/host \
                 build_dir/toolchain-* \
+                build_dir/host \
               2>/dev/null || true) | openssl enc -e -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -out /tmp/toolchain-cache.tar.zst.enc
           
           echo "==> Removing raw toolchain directories to free space..."
-          rm -rf staging_dir/toolchain-* staging_dir/host build_dir/toolchain-* || true
+          rm -rf staging_dir/toolchain-* staging_dir/host build_dir/toolchain-* build_dir/host || true
           
           cd -
 
@@ -369,6 +347,29 @@ jobs:
           echo "Toolchain image pushed: ${TOOLCHAIN_IMAGE}"
           # Clean up the large context to recover disk space before the prune step
           rm -rf /tmp/toolchain-build-ctx
+
+      - name: Purge Unneeded Build Artifacts
+        if: always()
+        run: |
+          PROFILE="${{ matrix.profile }}"
+          WORKTREE="source/worktrees/${PROFILE}"
+          echo "==> Purging target build artifacts to free disk space..."
+          rm -rf source/main || true
+          rm -rf "${WORKTREE}/bin" || true
+          rm -rf "${WORKTREE}/build_dir/target-"* || true
+          rm -rf "${WORKTREE}/build_dir/host"* || true
+          rm -rf "${WORKTREE}/staging_dir/target-"* || true
+          rm -rf "${WORKTREE}/staging_dir/hostpkg" || true
+
+      - name: Pack and Push ccache (GHCR)
+        if: always() && github.event.inputs.enable_ccache == 'true'
+        env:
+          BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
+        run: ./app/scripts/engine/pack-ccache.sh "$CCACHE_IMAGE"
+
+      - name: Delete Raw Cache Directories
+        if: always()
+        run: rm -rf dl/ .ccache/ source/main/ || true
 
       - name: Prune Old GHCR Toolchains
         if: always()

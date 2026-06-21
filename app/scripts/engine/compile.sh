@@ -19,10 +19,10 @@ if [ "${TOOLCHAIN_RESTORED:-false}" = "true" ]; then
     echo "==> Toolchain restored from cache — fixing timestamps..."
     # staging_dir stamps (toolchain and host)
     find "$WORKTREE_DIR/staging_dir/" \
-        \( -name ".built" -o -name ".configured" -o -name ".prepared" \) \
-        -exec touch {} +
-    # build_dir stamps for toolchain targets
-    find "$WORKTREE_DIR/build_dir/toolchain-"* \
+        -path "*/stamp/*" -type f \
+        -exec touch {} + 2>/dev/null || true
+    # build_dir stamps for toolchain and host targets
+    find "$WORKTREE_DIR/build_dir/toolchain-"* "$WORKTREE_DIR/build_dir/host" \
         \( -name ".built" -o -name ".configured" -o -name ".prepared" \) \
         -exec touch {} + 2>/dev/null || true
     echo "==> Timestamps fixed."
