@@ -33,9 +33,6 @@ fi
 ccache -M "${CCACHE_MAX_SIZE:-20G}"
 echo "ccache max size: $(ccache -p | grep max_size | awk '{print $NF}')"
 
-mkdir -p /builder/dl
-echo "Downloading package dependencies using $(nproc) cores..."
-make download -j"$(nproc)" DL_DIR=/builder/dl 2>&1 | python3 "$BUILDER_ROOT/scripts/engine/filter_logs.py"
 
 echo "Compiling firmware using $(nproc) cores..."
 if ! make -j"$(nproc)" DL_DIR=/builder/dl 2>&1 | python3 "$BUILDER_ROOT/scripts/engine/filter_logs.py"; then

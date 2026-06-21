@@ -128,6 +128,7 @@ jobs:
         run: |
           if [ -f source-main.tar.zst.enc ]; then
             openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -in source-main.tar.zst.enc | tar -x -I 'zstd -T0'
+            rm -f source-main.tar.zst.enc
           fi
         env:
           BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
@@ -147,6 +148,7 @@ jobs:
         run: |
           if [ -f dl.tar.zst.enc ]; then
             openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -in dl.tar.zst.enc | tar -x -I 'zstd -T0'
+            rm -f dl.tar.zst.enc
           fi
         env:
           BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
@@ -166,6 +168,7 @@ jobs:
         run: |
           if [ -f ccache.tar.zst.enc ]; then
             openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -in ccache.tar.zst.enc | tar -x -I 'zstd -T0'
+            rm -f ccache.tar.zst.enc
           fi
         env:
           BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
@@ -215,6 +218,10 @@ jobs:
         with:
           path: source-main.tar.zst.enc
           key: ${{ steps.cache-source.outputs.cache-primary-key }}
+
+      - name: Delete Source Cache Archive
+        if: always()
+        run: rm -f source-main.tar.zst.enc || true
 
       - name: Calculate Toolchain Cache Hash
         id: toolchain-hash
@@ -269,16 +276,54 @@ jobs:
 
       # ── Build ─────────────────────────────────────────────────────────────────
 
-      - name: Build Firmware
+      - name: Build Firmware - Download
         run: |
           mkdir -p profiles source dl .ccache artifacts
+          env UID=$(id -u) GID=$(id -g) docker compose run --rm \
+            builder bash -c "\
+              builder load-config --profile ${{ matrix.profile }} \
+                ${{ github.event.inputs.enable_ccache == 'true' && '--ccache' || '' }} && \
+              builder download --profile ${{ matrix.profile }} \
+                ${{ github.event.inputs.debug == 'true' && '--debug' || '' }} \
+                --log-to /builder/artifacts/${{ matrix.profile }}/download.log"
+
+      - name: Prune Download Cache
+        if: always()
+        env:
+          CACHE_RETENTION_DAYS: ${{ github.event.inputs.cache_retention_days || '30' }}
+        run: |
+          if [ -d dl/ ]; then
+            python3 app/scripts/engine/prune-dl.py
+          fi
+
+      - name: Compress and Encrypt Download Cache
+        if: always()
+        run: |
+          if [ -d dl/ ]; then
+            tar -c -I 'zstd -T0 -3' dl/ | openssl enc -e -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -out dl.tar.zst.enc
+          fi
+        env:
+          BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
+
+      - name: Save Download Directory Cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: dl.tar.zst.enc
+          key: ${{ steps.cache-dl.outputs.cache-primary-key }}
+
+      - name: Delete Download Cache Archive
+        if: always()
+        run: rm -f dl.tar.zst.enc || true
+
+      - name: Build Firmware - Compile
+        run: |
           env UID=$(id -u) GID=$(id -g) \
             TOOLCHAIN_RESTORED="${TOOLCHAIN_RESTORED:-false}" \
           docker compose run --rm \
             -e TOOLCHAIN_RESTORED \
             -e CCACHE_MAX_SIZE=${{ github.event.inputs.ccache_size || '20G' }} \
             builder bash -c "\
-              builder load-config --profile ${{ matrix.profile }} && \
               builder compile --profile ${{ matrix.profile }} \
                 ${{ github.event.inputs.fallback_single_core == 'true' && '--fallback' || '' }} \
                 ${{ github.event.inputs.enable_ccache == 'true' && '--ccache' || '' }} \
@@ -340,34 +385,11 @@ jobs:
           path: ccache.tar.zst.enc
           key: openwrt-ccache-${{ matrix.profile }}-${{ github.run_id }}
 
-      - name: Delete ccache Directory
+      - name: Delete ccache Directory and Archive
         if: always()
-        run: rm -rf .ccache/ || true
+        run: rm -rf .ccache/ ccache.tar.zst.enc || true
 
-      - name: Prune Download Cache
-        if: always()
-        env:
-          CACHE_RETENTION_DAYS: ${{ github.event.inputs.cache_retention_days || '30' }}
-        run: |
-          if [ -d dl/ ]; then
-            python3 app/scripts/engine/prune-dl.py
-          fi
 
-      - name: Compress and Encrypt Download Cache
-        if: always()
-        run: |
-          if [ -d dl/ ]; then
-            tar -c -I 'zstd -T0 -3' dl/ | openssl enc -e -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -out dl.tar.zst.enc
-          fi
-        env:
-          BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
-
-      - name: Save Download Directory Cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: dl.tar.zst.enc
-          key: ${{ steps.cache-dl.outputs.cache-primary-key }}
 
       - name: Delete Download Cache Directory
         if: always()

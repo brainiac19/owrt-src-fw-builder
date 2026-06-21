@@ -123,13 +123,16 @@ case "$COMMAND" in
         "$BUILDER_ROOT/scripts/engine/build.sh"
         ;;
     compile)
-        "$BUILDER_ROOT/scripts/engine/07-compile.sh"
+        "$BUILDER_ROOT/scripts/engine/compile.sh"
+        ;;
+    download)
+        "$BUILDER_ROOT/scripts/engine/download.sh"
         ;;
     load-config)
-        "$BUILDER_ROOT/scripts/engine/06-load-config.sh"
+        "$BUILDER_ROOT/scripts/engine/load-config.sh"
         ;;
     export-artifacts)
-        "$BUILDER_ROOT/scripts/engine/08-export-artifacts.sh"
+        "$BUILDER_ROOT/scripts/engine/export-artifacts.sh"
         ;;
     clean)
         if [[ -d "$WORKTREE_DIR" ]]; then

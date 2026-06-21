@@ -6,10 +6,11 @@ if [[ "$FRESH" -eq 1 || ! -d "$WORKTREE_DIR" ]]; then
     "$BUILDER_ROOT/scripts/engine/setup.sh"
 else
     # Always re-apply feeds and install packages so profile.toml changes are instantly reflected!
-    "$BUILDER_ROOT/scripts/engine/02-apply-feeds.sh"
-    "$BUILDER_ROOT/scripts/engine/03-install-packages.sh"
+    "$BUILDER_ROOT/scripts/engine/apply-feeds.sh"
+    "$BUILDER_ROOT/scripts/engine/install-packages.sh"
 fi
 
-"$BUILDER_ROOT/scripts/engine/06-load-config.sh"
-"$BUILDER_ROOT/scripts/engine/07-compile.sh"
-"$BUILDER_ROOT/scripts/engine/08-export-artifacts.sh"
+"$BUILDER_ROOT/scripts/engine/load-config.sh"
+"$BUILDER_ROOT/scripts/engine/download.sh"
+"$BUILDER_ROOT/scripts/engine/compile.sh"
+"$BUILDER_ROOT/scripts/engine/export-artifacts.sh"
