@@ -1,0 +1,9 @@
+profiles/
+artifacts/
+dl/
+ccache/
+source/
+.git/
+.github/
+docs/
+*.md

@@ -1,0 +1,6 @@
+/artifacts/
+/source/
+/dl/
+/.ccache/
+/docker-image.tar
+/profiles/

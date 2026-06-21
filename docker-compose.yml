@@ -1,0 +1,12 @@
+services:
+  builder:
+    build: ./app
+    image: firmware-builder:latest
+    user: "${UID:-1000}:${GID:-1000}"
+    volumes:
+      - ./profiles:/builder/profiles:rw
+      - ./source:/builder/source
+      - ./dl:/builder/dl
+      - ./.ccache:/builder/ccache
+      - ./artifacts:/builder/artifacts:rw
+      # - ./my-personal-scripts:/builder/uci-defaults-extra:ro

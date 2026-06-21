@@ -1,0 +1,393 @@
+name: Build ImmortalWrt
+
+on:
+  # push:
+  #   branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Device profile slug to build (leave empty or "all" to build all)'
+        required: false
+        default: 'all'
+      fresh_build:
+        description: 'Fresh build (reset source and re-apply everything)'
+        required: false
+        type: boolean
+        default: false
+      fallback_single_core:
+        description: 'Fallback to single core build on failure'
+        required: false
+        type: boolean
+        default: true
+      ccache_size:
+        description: 'Max ccache size (e.g. 10G, 20G, 50G)'
+        required: false
+        default: '20G'
+      enable_ccache:
+        description: 'Enable ccache for compilation'
+        required: false
+        type: boolean
+        default: true
+  # schedule:
+  #   - cron: '0 0 * * 0'  # Weekly, midnight Sunday UTC
+
+jobs:
+  setup:
+    name: Setup Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout Builder Repository
+        uses: actions/checkout@v4
+        
+      - name: Checkout Profiles Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.PROFILES_REPO }}
+          token: ${{ secrets.PROFILES_PAT }}
+          path: profiles
+          
+      - name: Generate Matrix
+        id: set-matrix
+        run: |
+          input_profile="${{ github.event.inputs.profile }}"
+          if [[ -z "$input_profile" || "$input_profile" == "all" ]]; then
+            # Get all directory names in profiles/ dynamically
+            PROFILES=$(cd profiles && ls -d */ | sed 's#/##' | jq -R -s -c 'split("\n")[:-1]')
+            echo "matrix=$PROFILES" >> $GITHUB_OUTPUT
+          else
+            # Use the specific profile requested
+            echo "matrix=[\"$input_profile\"]" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    name: Build ${{ matrix.profile }}
+    runs-on: ubuntu-latest
+    needs: setup
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false    # don't cancel other profiles if one fails
+      matrix:
+        profile: ${{ fromJson(needs.setup.outputs.matrix) }}
+
+    steps:
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          # Frees ~30 GB; swap kept off to avoid a virtual-disk consuming real space
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
+      - name: Checkout Builder Repository
+        uses: actions/checkout@v4
+
+      - name: Checkout Profiles Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.PROFILES_REPO }}
+          token: ${{ secrets.PROFILES_PAT }}
+          path: profiles
+
+      - name: Install Dependencies
+        run: sudo apt-get update && sudo apt-get install -y age zstd p7zip-full
+
+      # ── Restore caches ────────────────────────────────────────────────────────
+      # Split restore/save is the current recommended pattern replacing save-always.
+      # Each cache gets an explicit save step at the end with `if: always()` so
+      # the cache is persisted even when the build step itself fails.
+
+      - name: Restore OpenWrt Source Cache
+        id: cache-source
+        uses: actions/cache/restore@v4
+        with:
+          path: source-main.tar.zst.age
+          key: openwrt-source-main-${{ github.run_id }}
+          restore-keys: |
+            openwrt-source-main-
+
+      - name: Decrypt and Extract Source Cache
+        if: steps.cache-source.outputs.cache-hit == 'true'
+        run: |
+          if [ -f source-main.tar.zst.age ]; then
+            age -d source-main.tar.zst.age | tar -x -I 'zstd -T0'
+          fi
+        env:
+          AGE_PASSPHRASE: ${{ secrets.BUILD_PASSWORD }}
+
+      - name: Restore Download Directory Cache
+        id: cache-dl
+        uses: actions/cache/restore@v4
+        with:
+          path: dl.tar.zst.age
+          # DL tarballs are profile-agnostic; fall back to any dl cache
+          key: openwrt-dl-${{ matrix.profile }}-${{ hashFiles(format('profiles/{0}/profile.toml', matrix.profile)) }}
+          restore-keys: |
+            openwrt-dl-
+
+      - name: Decrypt and Extract Download Cache
+        if: steps.cache-dl.outputs.cache-hit == 'true'
+        run: |
+          if [ -f dl.tar.zst.age ]; then
+            age -d dl.tar.zst.age | tar -x -I 'zstd -T0'
+          fi
+        env:
+          AGE_PASSPHRASE: ${{ secrets.BUILD_PASSWORD }}
+
+      - name: Restore ccache
+        id: cache-ccache
+        if: github.event.inputs.enable_ccache == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ccache.tar.zst.age
+          key: openwrt-ccache-${{ matrix.profile }}-${{ github.run_id }}
+          restore-keys: |
+            openwrt-ccache-${{ matrix.profile }}-
+
+      - name: Decrypt and Extract ccache
+        if: steps.cache-ccache.outputs.cache-hit == 'true'
+        run: |
+          if [ -f ccache.tar.zst.age ]; then
+            age -d ccache.tar.zst.age | tar -x -I 'zstd -T0'
+          fi
+        env:
+          AGE_PASSPHRASE: ${{ secrets.BUILD_PASSWORD }}
+
+      # Docker image: use BuildKit inline layer cache instead of a tar blob.
+      # This avoids storing a multi-GB tar in the 10 GB repo cache quota.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Docker Image (with layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app
+          load: true           # make the image available to the local daemon
+          tags: firmware-builder:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Disk Space Before Build
+        run: df -h /
+
+      # ── Setup ─────────────────────────────────────────────────────────────────
+
+      - name: Setup Firmware Source
+        run: |
+          mkdir -p profiles source dl .ccache artifacts
+          env UID=$(id -u) GID=$(id -g) docker compose run --rm \
+            builder builder setup --profile ${{ matrix.profile }} \
+            ${{ github.event.inputs.fresh_build == 'true' && '--fresh' || '' }}
+
+      - name: Compress and Encrypt Source Cache
+        if: steps.cache-source.outputs.cache-hit != 'true'
+        run: tar -c -I 'zstd -T0 -3' source/main/ | age -p -o source-main.tar.zst.age
+        env:
+          AGE_PASSPHRASE: ${{ secrets.BUILD_PASSWORD }}
+
+      - name: Save OpenWrt Source Cache
+        if: steps.cache-source.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: source-main.tar.zst.age
+          key: ${{ steps.cache-source.outputs.cache-primary-key }}
+
+      - name: Calculate Toolchain Cache Hash
+        id: toolchain-hash
+        run: |
+          PROFILE="${{ matrix.profile }}"
+          # Actual commit SHA — the shallow fetch may have advanced the branch
+          SOURCE_SHA=$(git -C source/main rev-parse HEAD)
+
+          HASH=$(printf '%s\n' \
+            "${SOURCE_SHA}" \
+            "$(cat source/main/include/toolchain.mk 2>/dev/null || true)" \
+            | sha256sum | head -c 16)
+
+          IMAGE_BASE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          IMAGE="${IMAGE_BASE}/toolchain-${PROFILE}:${HASH}"
+
+          echo "hash=${HASH}"       >> $GITHUB_OUTPUT
+          echo "image=${IMAGE}"     >> $GITHUB_OUTPUT
+          echo "TOOLCHAIN_IMAGE=${IMAGE}" >> $GITHUB_ENV
+
+      - name: Restore Toolchain from GHCR
+        id: toolchain-restore
+        env:
+          AGE_PASSPHRASE: ${{ secrets.BUILD_PASSWORD }}
+        run: |
+          PROFILE="${{ matrix.profile }}"
+          WORKTREE="source/worktrees/${PROFILE}"
+
+          echo "Attempting to pull toolchain image: ${TOOLCHAIN_IMAGE}"
+          if docker pull "${TOOLCHAIN_IMAGE}" 2>/dev/null; then
+            echo "Cache HIT — extracting toolchain..."
+            mkdir -p "${WORKTREE}"
+
+            # Create a temporary container from the data image (no need to run it)
+            docker create --name tc-seed "${TOOLCHAIN_IMAGE}"
+
+            # Extract the encrypted archive and decrypt it directly into the worktree
+            docker cp tc-seed:/toolchain/toolchain-cache.tar.zst.age /tmp/
+            age -d /tmp/toolchain-cache.tar.zst.age | tar -x -I 'zstd -T0' -C "${WORKTREE}"
+            rm /tmp/toolchain-cache.tar.zst.age
+
+            docker rm tc-seed
+
+            echo "TOOLCHAIN_RESTORED=true" >> $GITHUB_ENV
+            echo "restored=true"           >> $GITHUB_OUTPUT
+            echo "Toolchain extracted successfully."
+          else
+            echo "Cache MISS — toolchain will be built from scratch."
+            echo "TOOLCHAIN_RESTORED=false" >> $GITHUB_ENV
+            echo "restored=false"           >> $GITHUB_OUTPUT
+          fi
+
+      # ── Build ─────────────────────────────────────────────────────────────────
+
+      - name: Build Firmware
+        run: |
+          mkdir -p profiles source dl .ccache artifacts
+          env UID=$(id -u) GID=$(id -g) \
+            TOOLCHAIN_RESTORED="${TOOLCHAIN_RESTORED:-false}" \
+          docker compose run --rm \
+            -e TOOLCHAIN_RESTORED \
+            -e CCACHE_MAX_SIZE=${{ github.event.inputs.ccache_size || '20G' }} \
+            builder bash -c "\
+              builder load-config --profile ${{ matrix.profile }} && \
+              builder compile --profile ${{ matrix.profile }} \
+                ${{ github.event.inputs.fallback_single_core == 'true' && '--fallback' || '' }} \
+                ${{ github.event.inputs.enable_ccache == 'true' && '--ccache' || '' }} && \
+              builder export-artifacts --profile ${{ matrix.profile }}"
+
+      - name: Compress and Password Protect Artifacts
+        run: |
+          mkdir -p protected_artifacts
+          cd artifacts/${{ matrix.profile }}
+          if [ -n "$BUILD_PASSWORD" ]; then
+            7z a -t7z -p"$BUILD_PASSWORD" -mhe=on -mx=5 -m0=lzma2 ../../protected_artifacts/firmware-${{ matrix.profile }}.7z .
+          else
+            echo "WARNING: BUILD_PASSWORD secret is not set. Creating an unencrypted zip archive."
+            zip -r ../../protected_artifacts/firmware-${{ matrix.profile }}.zip .
+          fi
+        env:
+          BUILD_PASSWORD: ${{ secrets.BUILD_PASSWORD }}
+
+      - name: Upload Firmware Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.profile }}-${{ github.run_number }}
+          path: protected_artifacts/
+          retention-days: 30
+
+      # ── Save caches (always run, even on build failure) ───────────────────────
+
+      - name: Purge Unneeded Build Artifacts
+        if: always()
+        run: |
+          PROFILE="${{ matrix.profile }}"
+          WORKTREE="source/worktrees/${PROFILE}"
+          echo "==> Purging target build artifacts to free disk space..."
+          rm -rf source/main || true
+          rm -rf "${WORKTREE}/bin" || true
+          rm -rf "${WORKTREE}/build_dir/target-"* || true
+          rm -rf "${WORKTREE}/build_dir/host"* || true
+          rm -rf "${WORKTREE}/staging_dir/target-"* || true
+          rm -rf "${WORKTREE}/staging_dir/hostpkg" || true
+
+      - name: Compress and Encrypt ccache
+        if: always() && github.event.inputs.enable_ccache == 'true'
+        run: |
+          if [ -d .ccache/ ]; then
+            tar -c -I 'zstd -T0 -3' .ccache/ | age -p -o ccache.tar.zst.age
+          fi
+        env:
+          AGE_PASSPHRASE: ${{ secrets.BUILD_PASSWORD }}
+
+      - name: Save ccache
+        if: always() && github.event.inputs.enable_ccache == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ccache.tar.zst.age
+          key: openwrt-ccache-${{ matrix.profile }}-${{ github.run_id }}
+
+      - name: Delete ccache Directory
+        if: always()
+        run: rm -rf .ccache/ || true
+
+      - name: Compress and Encrypt Download Cache
+        if: always()
+        run: |
+          if [ -d dl/ ]; then
+            tar -c -I 'zstd -T0 -3' dl/ | age -p -o dl.tar.zst.age
+          fi
+        env:
+          AGE_PASSPHRASE: ${{ secrets.BUILD_PASSWORD }}
+
+      - name: Save Download Directory Cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: dl.tar.zst.age
+          key: ${{ steps.cache-dl.outputs.cache-primary-key }}
+
+      - name: Delete Download Cache Directory
+        if: always()
+        run: rm -rf dl/ || true
+
+      - name: Save Toolchain to GHCR
+        if: success() && env.TOOLCHAIN_RESTORED != 'true'
+        env:
+          AGE_PASSPHRASE: ${{ secrets.BUILD_PASSWORD }}
+        run: |
+          PROFILE="${{ matrix.profile }}"
+          WORKTREE="source/worktrees/${PROFILE}"
+
+          echo "==> Packing toolchain directories..."
+          cd "${WORKTREE}"
+          tar -c -I 'zstd -T0 -3' \
+            $(ls -d \
+                staging_dir/toolchain-* \
+                staging_dir/host \
+                build_dir/toolchain-* \
+              2>/dev/null || true) | age -p -o /tmp/toolchain-cache.tar.zst.age
+          cd -
+
+          echo "==> Building data image..."
+          mkdir /tmp/toolchain-build-ctx
+          mv /tmp/toolchain-cache.tar.zst.age /tmp/toolchain-build-ctx/
+          cat > /tmp/toolchain-build-ctx/Dockerfile << 'DOCKERFILE'
+          FROM scratch
+          COPY toolchain-cache.tar.zst.age /toolchain/
+          DOCKERFILE
+
+          docker build \
+            --no-cache \
+            -f /tmp/toolchain-build-ctx/Dockerfile \
+            -t "${TOOLCHAIN_IMAGE}" \
+            /tmp/toolchain-build-ctx
+
+          echo "==> Pushing to GHCR..."
+          docker push "${TOOLCHAIN_IMAGE}"
+
+          echo "Toolchain image pushed: ${TOOLCHAIN_IMAGE}"
+          # Clean up the large context to recover disk space before the prune step
+          rm -rf /tmp/toolchain-build-ctx
+
+      - name: Clean Up Workspace
+        if: always()
+        run: rm -rf source/ || true
