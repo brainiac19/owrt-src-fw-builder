@@ -115,9 +115,11 @@ jobs:
         id: cache-images
         run: |
           IMAGE_BASE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          REPO_NAME=$(echo '${{ github.repository }}' | cut -d '/' -f 2 | tr '[:upper:]' '[:lower:]')
           echo "SOURCE_IMAGE=${IMAGE_BASE}/source-cache-${{ matrix.profile }}:latest" >> $GITHUB_ENV
           echo "DL_IMAGE=${IMAGE_BASE}/dl-cache-${{ matrix.profile }}:latest" >> $GITHUB_ENV
           echo "CCACHE_IMAGE=${IMAGE_BASE}/ccache-${{ matrix.profile }}:latest" >> $GITHUB_ENV
+          echo "PKG_PREFIX=${REPO_NAME}/" >> $GITHUB_ENV
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -370,36 +372,40 @@ jobs:
 
       - name: Prune Old GHCR Toolchains
         if: always()
+        continue-on-error: true
         uses: actions/delete-package-versions@v5
         with:
-          package-name: toolchain-${{ matrix.profile }}
+          package-name: ${{ env.PKG_PREFIX }}toolchain-${{ matrix.profile }}
           package-type: 'container'
           min-versions-to-keep: 1
           delete-only-untagged-versions: 'false'
 
       - name: Prune Old GHCR Source Cache
         if: always()
+        continue-on-error: true
         uses: actions/delete-package-versions@v5
         with:
-          package-name: source-cache-${{ matrix.profile }}
+          package-name: ${{ env.PKG_PREFIX }}source-cache-${{ matrix.profile }}
           package-type: 'container'
           min-versions-to-keep: 1
           delete-only-untagged-versions: 'false'
 
       - name: Prune Old GHCR Download Cache
         if: always()
+        continue-on-error: true
         uses: actions/delete-package-versions@v5
         with:
-          package-name: dl-cache-${{ matrix.profile }}
+          package-name: ${{ env.PKG_PREFIX }}dl-cache-${{ matrix.profile }}
           package-type: 'container'
           min-versions-to-keep: 1
           delete-only-untagged-versions: 'false'
 
       - name: Prune Old GHCR ccache
         if: always() && github.event.inputs.enable_ccache == 'true'
+        continue-on-error: true
         uses: actions/delete-package-versions@v5
         with:
-          package-name: ccache-${{ matrix.profile }}
+          package-name: ${{ env.PKG_PREFIX }}ccache-${{ matrix.profile }}
           package-type: 'container'
           min-versions-to-keep: 1
           delete-only-untagged-versions: 'false'
