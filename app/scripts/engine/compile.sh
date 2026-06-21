@@ -30,6 +30,7 @@ fi
 # ──────────────────────────────────────────────────────────────────────────────
 
 # Apply ccache max size — configurable via CCACHE_MAX_SIZE env var
+export CCACHE_DIR="/builder/ccache"
 ccache -M "${CCACHE_MAX_SIZE:-20G}"
 echo "ccache max size: $(ccache -p | grep max_size | awk '{print $NF}')"
 

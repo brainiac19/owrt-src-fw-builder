@@ -27,12 +27,13 @@ profile_dir = sys.argv[1]
 worktree_dir = sys.argv[2]
 defconfig_path = os.path.join(worktree_dir, "defconfig")
 
-pkg_names = set(["DOCKER", "LIBCURL"])
+pkg_prefixes = {"DOCKER": "docker", "LIBCURL": "libcurl"}
 for m in glob.glob(os.path.join(worktree_dir, "feeds/*/*/Makefile")):
     parts = m.split("/")
     if len(parts) >= 3:
-        pkg = parts[-2].upper().replace("-", "_")
-        pkg_names.add(pkg)
+        orig_name = parts[-2]
+        prefix = orig_name.upper().replace("-", "_").replace(".", "_").replace("+", "X")
+        pkg_prefixes[prefix] = orig_name
 
 with open(os.path.join(profile_dir, "profile.toml"), "rb") as f:
     config = tomllib.load(f)
@@ -69,9 +70,18 @@ for line in lines:
         pkg_name = ""
         
         if prefix not in {"TARGET", "KERNEL"} and prefix not in known_prefixes:
-            if prefix in pkg_names:
-                is_pkg_option = True
-                pkg_name = prefix.lower().replace("_", "-")
+            key_stripped = key[7:]
+            if not key_stripped.startswith("PACKAGE_"):
+                parts = key_stripped.split("_")
+                matched_pkg_orig = ""
+                for i in range(len(parts), 0, -1):
+                    candidate = "_".join(parts[:i])
+                    if candidate in pkg_prefixes:
+                        matched_pkg_orig = pkg_prefixes[candidate]
+                        break
+                if matched_pkg_orig:
+                    is_pkg_option = True
+                    pkg_name = matched_pkg_orig
 
         if is_pkg_option:
             if pkg_name not in pkg_options:

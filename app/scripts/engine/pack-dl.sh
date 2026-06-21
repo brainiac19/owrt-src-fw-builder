@@ -83,6 +83,9 @@ EOF
     elif [ "$CHANGED" -eq 1 ] && [ -z "$hash_after" ]; then
         echo "  -> Chunk $chunk is now empty. Removing from cache."
         docker build -t "temp-dl:$i" /tmp/dl-ctx
+    else
+        echo "  -> Chunk $chunk unchanged (empty). Reusing layer..."
+        docker build -t "temp-dl:$i" /tmp/dl-ctx
     fi
 
     rm -rf "$chunk_dir"

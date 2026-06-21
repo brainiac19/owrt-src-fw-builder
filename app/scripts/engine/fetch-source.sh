@@ -27,6 +27,7 @@ fi
 mkdir -p /builder/source/main /builder/source/worktrees
 if [ ! -d "/builder/source/main/.git" ]; then
     echo "Cloning main source repository (shallow)..."
+    rm -rf /builder/source/main || true
     git clone --depth=1 -b "$BRANCH" "$REPO" /builder/source/main
 else
     if [[ $FRESH_SETUP -eq 1 ]]; then
@@ -36,8 +37,9 @@ else
     fi
 fi
 
-if [ ! -d "$WORKTREE_DIR" ]; then
+if [ ! -e "$WORKTREE_DIR/.git" ]; then
     echo "Creating worktree for $PROFILE..."
+    rm -rf "$WORKTREE_DIR" || true
     git -C /builder/source/main worktree prune
     git -C /builder/source/main worktree add --detach "$WORKTREE_DIR" HEAD
 else
