@@ -31,17 +31,21 @@ fi
 
 # Apply ccache max size — configurable via CCACHE_MAX_SIZE env var
 export CCACHE_DIR="/builder/ccache"
+export CONFIG_CCACHE_DIR="/builder/ccache"
 ccache -M "${CCACHE_MAX_SIZE:-20G}"
 echo "ccache max size: $(ccache -p | grep max_size | awk '{print $NF}')"
 
+echo "==> ccache stats before build:"
+ccache -s || true
+
 
 echo "Compiling firmware using $(nproc) cores..."
-if ! make -j"$(nproc)" DL_DIR=/builder/dl 2>&1 | python3 "$BUILDER_ROOT/scripts/engine/filter_logs.py"; then
+if ! make -j"$(nproc)" DL_DIR=/builder/dl CONFIG_CCACHE_DIR="/builder/ccache" 2>&1 | python3 "$BUILDER_ROOT/scripts/engine/filter_logs.py"; then
     if [[ "$FALLBACK_SINGLE_CORE" == "1" ]]; then
         echo "==========================================================="
         echo "Build failed with $(nproc) cores! Falling back to single core..."
         echo "==========================================================="
-        if ! make -C "$WORKTREE_DIR" -j1 V=s DL_DIR=/builder/dl 2>&1 | python3 "$BUILDER_ROOT/scripts/engine/filter_logs.py"; then
+        if ! make -C "$WORKTREE_DIR" -j1 V=s DL_DIR=/builder/dl CONFIG_CCACHE_DIR="/builder/ccache" 2>&1 | python3 "$BUILDER_ROOT/scripts/engine/filter_logs.py"; then
             echo "==========================================================="
             echo "Single core build also failed!"
             echo "==========================================================="
@@ -51,10 +55,13 @@ if ! make -j"$(nproc)" DL_DIR=/builder/dl 2>&1 | python3 "$BUILDER_ROOT/scripts/
         echo "==========================================================="
         echo "Build failed!"
         echo "To debug, run this command inside the container to see verbose logs:"
-        echo "make -C $WORKTREE_DIR -j1 V=s DL_DIR=/builder/dl"
+        echo "make -C $WORKTREE_DIR -j1 V=s DL_DIR=/builder/dl CONFIG_CCACHE_DIR=/builder/ccache"
         echo "==========================================================="
         exit 1
     fi
 fi
 
 echo "=== Build Process Finished ==="
+
+echo "==> ccache stats after build:"
+ccache -s || true
