@@ -20,6 +20,9 @@ if [ ! -d ".ccache" ]; then
     exit 0
 fi
 
+echo "  -> ccache uncompressed size before packing:"
+du -sh .ccache 2>/dev/null | awk '{print "     " $0}' || true
+
 # Initialize base image
 docker pull busybox:1 2>/dev/null || true
 docker tag busybox:1 "temp-ccache:0"

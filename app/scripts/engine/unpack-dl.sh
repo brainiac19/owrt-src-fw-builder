@@ -33,6 +33,8 @@ if docker pull "$IMAGE_NAME" 2>/dev/null; then
         done
     fi
     rm -rf /tmp/dl-cache
+    echo "  -> dl cache uncompressed size:"
+    du -sh dl 2>/dev/null | awk '{print "     " $0}' || true
     echo "==> dl cache restored."
 else
     echo "  -> Cache image not found. Will start fresh."

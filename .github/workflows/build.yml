@@ -216,6 +216,9 @@ jobs:
             openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -in /tmp/toolchain-cache.tar.zst.enc | tar -x -I 'zstd -T0' -C "${WORKTREE}"
             rm /tmp/toolchain-cache.tar.zst.enc
 
+            echo "  -> Toolchain uncompressed size:"
+            du -sh "${WORKTREE}/staging_dir/toolchain-"* "${WORKTREE}/staging_dir/host" "${WORKTREE}/build_dir/toolchain-"* "${WORKTREE}/build_dir/host" 2>/dev/null | awk '{print "     " $0}' || true
+
             docker rm tc-seed
 
             echo "TOOLCHAIN_RESTORED=true" >> $GITHUB_ENV
@@ -314,6 +317,9 @@ jobs:
 
           echo "==> Packing toolchain directories..."
           cd "${WORKTREE}"
+          
+          echo "  -> Toolchain uncompressed size before packing:"
+          du -sh staging_dir/toolchain-* staging_dir/host build_dir/toolchain-* build_dir/host 2>/dev/null | awk '{print "     " $0}' || true
           tar -c -I 'zstd -T0 -3' \
             $(ls -d \
                 staging_dir/toolchain-* \

@@ -44,6 +44,8 @@ EOF
 
 if [ "$CHANGED" -eq 1 ]; then
     echo "  -> Source changed (or new image). Compressing..."
+    echo "  -> Source cache uncompressed size before packing:"
+    du -sh source/main 2>/dev/null | awk '{print "     " $0}' || true
     tar -c -I 'zstd -T0 -3' -C source main | openssl enc -e -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -out /tmp/source-ctx/source-main.tar.zst.enc
     
     # Aggressive pruning immediately after compression

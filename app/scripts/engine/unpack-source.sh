@@ -23,6 +23,8 @@ if docker pull "$IMAGE_NAME" 2>/dev/null; then
         openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BUILD_PASSWORD -in /tmp/source-cache/cache/source-main.tar.zst.enc | tar -x -I 'zstd -T0' -C source
     fi
     rm -rf /tmp/source-cache
+    echo "  -> Source cache uncompressed size:"
+    du -sh source/main 2>/dev/null | awk '{print "     " $0}' || true
     echo "==> Source cache restored."
 else
     echo "  -> Cache image not found. Will start fresh."

@@ -27,6 +27,8 @@ if docker pull "$IMAGE_NAME" 2>/dev/null; then
         done
     fi
     rm -rf /tmp/ccache-cache
+    echo "  -> ccache uncompressed size:"
+    du -sh .ccache 2>/dev/null | awk '{print "     " $0}' || true
     echo "==> ccache restored."
 else
     echo "  -> Cache image not found. Will start fresh."
