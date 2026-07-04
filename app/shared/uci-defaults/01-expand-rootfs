@@ -22,12 +22,37 @@ if [ -z "$DISK" ] || [ -z "$PART" ]; then
 fi
 
 logger -t "expand-rootfs" "Fixing GPT backup header if necessary..."
-# When a smaller image is flashed to a larger SD card, the GPT backup header is in the wrong place.
-# This silently fixes it on GPT disks, and acts as a safe no-op on MBR disks.
-echo "Fix" | parted ---pretend-input-tty "$DISK" print >/dev/null 2>&1
+# When a smaller image is flashed to a larger SD card, the GPT backup header
+# ends up in the middle of the disk. 'parted resizepart 100%' then fails with
+# "Can't have overlapping partitions" because 100% is computed relative to the
+# misplaced backup header, not the real disk end.
+#
+# Fix strategy using ONLY parted (default lightweight tool):
+#   1. Use 'parted ---pretend-input-tty' with 'Fix' to relocate the backup GPT
+#      header to the real end of the disk. This is a safe no-op on MBR disks.
+#   2. Force the kernel to re-read the updated partition table so parted sees
+#      the corrected layout before we call resizepart.
+#   3. Use 'parted unit s print' to compute the true last free sector and pass
+#      an explicit sector number '<N>s' to resizepart instead of '100%'.
+echo "Fix" | parted ---pretend-input-tty "$DISK" print >/dev/null 2>&1 || true
 
-logger -t "expand-rootfs" "Expanding partition $PART on disk $DISK to 100%..."
-parted -s "$DISK" resizepart "$PART" 100%
+# Force kernel to see the updated partition table
+partprobe "$DISK" 2>/dev/null || partx -u "$DISK" 2>/dev/null || true
+sleep 1  # give udev a moment to settle
+
+logger -t "expand-rootfs" "Expanding partition $PART on disk $DISK..."
+# To avoid parted miscomputing '100%' on disks where the GPT backup header was just relocated,
+# we compute the last available free sector explicitly using sector units.
+PART_END="$(parted -s "$DISK" unit s print 2>/dev/null | awk -v p="$PART" '$1 == p {print $3}' | grep -oE '[0-9]+')"
+FREE_END="$(parted -s "$DISK" unit s print free 2>/dev/null | grep -i 'free space' | tail -n 1 | awk '{print $2}' | grep -oE '[0-9]+')"
+
+if [ -n "$FREE_END" ] && [ -n "$PART_END" ] && [ "$FREE_END" -gt "$PART_END" ] 2>/dev/null; then
+    logger -t "expand-rootfs" "Resizing partition $PART from ${PART_END}s to ${FREE_END}s..."
+    parted -s "$DISK" unit s resizepart "$PART" "${FREE_END}s"
+else
+    logger -t "expand-rootfs" "Fallback: Resizing partition $PART to 100%..."
+    parted -s "$DISK" resizepart "$PART" 100%
+fi
 
 # Reload partition table
 partx -u "$DISK" 2>/dev/null || block auto
