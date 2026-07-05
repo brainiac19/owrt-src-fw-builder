@@ -8,3 +8,8 @@ cd "$WORKTREE_DIR"
 ./scripts/feeds uninstall -a
 
 ./scripts/feeds install -a
+
+echo "==> Checking for pre-build package file conflicts..."
+python3 "$BUILDER_ROOT/scripts/engine/check_pkg_conflicts.py" \
+    "$WORKTREE_DIR" \
+    "$PROFILE_DIR/profile.toml"
