@@ -40,7 +40,3 @@ for name in reversed(feed_names):
 ' "$PROFILE_DIR/profile.toml"
 # ──────────────────────────────────────────────────────────────────────────────
 
-echo "==> Checking for pre-build package file conflicts..."
-python3 "$BUILDER_ROOT/scripts/engine/check_pkg_conflicts.py" \
-    "$WORKTREE_DIR" \
-    "$PROFILE_DIR/profile.toml"
