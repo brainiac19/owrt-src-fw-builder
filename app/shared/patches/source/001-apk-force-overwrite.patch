@@ -1,0 +1,11 @@
+--- a/include/rootfs.mk
++++ b/include/rootfs.mk
+@@ -49,7 +49,8 @@ apk = \
+ 	--root $(1) \
+ 	--keys-dir $(if $(APK_KEYS),$(APK_KEYS),$(TOPDIR)) \
+ 	--no-logfile \
+-	--preserve-env
++	--preserve-env \
++	--force-overwrite
+ 
+ TARGET_DIR_ORIG := $(TARGET_ROOTFS_DIR)/root.orig-$(BOARD)

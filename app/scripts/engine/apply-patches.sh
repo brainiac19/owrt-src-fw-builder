@@ -36,6 +36,23 @@ if [ -d "$PROFILE_DIR/patches/kernel" ]; then
     done
 fi
 
+# ── Shared source patches (applied to every profile) ─────────────────────────
+SHARED_PATCHES_DIR="$BUILDER_ROOT/shared/patches/source"
+if [ -d "$SHARED_PATCHES_DIR" ]; then
+    for patch in "$SHARED_PATCHES_DIR/"*.patch; do
+        [ -f "$patch" ] || continue
+        if patch --dry-run -p1 -d "$WORKTREE_DIR" --silent < "$patch" 2>/dev/null; then
+            patch -p1 -d "$WORKTREE_DIR" < "$patch"
+            echo "Applied shared patch: $(basename "$patch")"
+        elif patch --dry-run -p1 -d "$WORKTREE_DIR" --reverse --silent < "$patch" 2>/dev/null; then
+            echo "Already applied — skipping: $(basename "$patch")"
+        else
+            echo "ERROR: Shared patch cannot apply cleanly: $(basename "$patch")"
+            exit 1
+        fi
+    done
+fi
+
 if [ -d "$PROFILE_DIR/patches/source" ]; then
     for patch in "$PROFILE_DIR/patches/source/"*.patch; do
         [ -f "$patch" ] || continue
