@@ -1,3 +1,4 @@
 parted
 losetup
 e2fsprogs
+f2fs-tools

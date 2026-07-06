@@ -1,70 +1,163 @@
 #!/bin/sh
-# /etc/uci-defaults/99-expand-rootfs
-# Auto-expand rootfs partition and filesystem on first boot
+# /etc/uci-defaults/01-expand-rootfs
+# Auto-expand rootfs partition and overlay filesystem on first boot.
+#
+# Automatically works for any device naming scheme (/dev/mmcblk*, /dev/sd*,
+# /dev/nvme*, /dev/vd*) without hardcoding device paths or breaking disk
+# suffixes (like /dev/mmcblk1 -> /dev/mmcblk).
+#
+# Removes any subsequent partitions (e.g. p3, p4) after the root/overlay
+# partition (p2) so that p2 can be expanded to occupy the whole disk.
 
 logger -t "expand-rootfs" "Starting auto-expansion of rootfs..."
 
-# Find the root block device
-ROOT_DEV="$(block info | grep -e 'MOUNT="/rom"' -e 'MOUNT="/"' | head -n 1 | cut -d: -f1)"
+# ---------------------------------------------------------------------------
+# 1. Find the physical (non-loop) block device that backs the root or overlay
+#    We check in order: /overlay -> /rom -> / (excluding any /dev/loop* devices).
+# ---------------------------------------------------------------------------
+TARGET_DEV="$(block info 2>/dev/null | grep 'MOUNT="/overlay"' | grep -v '^/dev/loop' | head -n 1 | cut -d: -f1)"
 
-if [ -z "$ROOT_DEV" ]; then
-    logger -t "expand-rootfs" "Error: Could not find root device via block info."
+if [ -z "$TARGET_DEV" ]; then
+    TARGET_DEV="$(block info 2>/dev/null | grep 'MOUNT="/rom"' | grep -v '^/dev/loop' | head -n 1 | cut -d: -f1)"
+fi
+
+if [ -z "$TARGET_DEV" ]; then
+    TARGET_DEV="$(block info 2>/dev/null | grep 'MOUNT="/"' | grep -v '^/dev/loop' | head -n 1 | cut -d: -f1)"
+fi
+
+if [ -z "$TARGET_DEV" ]; then
+    logger -t "expand-rootfs" "Error: Could not find target root/overlay block device."
     exit 1
 fi
 
-# Extract disk and partition number (handles /dev/mmcblk1p2 -> disk=/dev/mmcblk1, part=2)
-DISK="$(echo "$ROOT_DEV" | sed -E 's/p[0-9]+$//')"
-PART="$(echo "$ROOT_DEV" | grep -oE '[0-9]+$')"
+# ---------------------------------------------------------------------------
+# 2. Safely extract DISK and PART without corrupting numbers in disk names
+# ---------------------------------------------------------------------------
+PART="$(echo "$TARGET_DEV" | grep -oE '[0-9]+$')"
 
-if [ -z "$DISK" ] || [ -z "$PART" ]; then
-    logger -t "expand-rootfs" "Error: Could not parse disk/partition."
+if [ -z "$PART" ]; then
+    logger -t "expand-rootfs" "Error: Could not determine partition number from $TARGET_DEV."
     exit 1
 fi
 
+DISK="${TARGET_DEV%p"$PART"}"
+if [ "$DISK" = "$TARGET_DEV" ]; then
+    DISK="${TARGET_DEV%"$PART"}"
+fi
+
+if [ -z "$DISK" ] || [ "$DISK" = "$TARGET_DEV" ]; then
+    logger -t "expand-rootfs" "Error: Could not determine base disk device from $TARGET_DEV."
+    exit 1
+fi
+
+logger -t "expand-rootfs" "Base disk: $DISK, Target Partition: $PART ($TARGET_DEV)"
+
+# ---------------------------------------------------------------------------
+# 3. Wipe any partitions AFTER the target partition (e.g. remove p3, p4 after p2)
+#    So that partition $PART can be expanded to occupy the remaining whole disk.
+# ---------------------------------------------------------------------------
+logger -t "expand-rootfs" "Checking for partitions after partition $PART on $DISK..."
+
+parted -s "$DISK" unit s print 2>/dev/null \
+    | awk -v p="$PART" '$1 ~ /^[0-9]+$/ && $1 > p {print $1}' \
+    | while read -r pnum; do
+        logger -t "expand-rootfs" "Removing partition $pnum after partition $PART to allow full disk expansion..."
+        
+        # Determine canonical device path for the partition being removed
+        if [ -e "${DISK}p${pnum}" ]; then
+            dev="${DISK}p${pnum}"
+        elif [ -e "${DISK}${pnum}" ]; then
+            dev="${DISK}${pnum}"
+        else
+            dev=""
+        fi
+        
+        if [ -n "$dev" ]; then
+            logger -t "expand-rootfs" "Unmounting $dev..."
+            umount -l "$dev" 2>/dev/null || true
+            swapoff "$dev" 2>/dev/null || true
+        fi
+
+        # Remove partition from disk
+        parted -s "$DISK" rm "$pnum" 2>/dev/null || true
+        
+        # Explicitly ask kernel to drop partition device node
+        if [ -n "$dev" ] && command -v partx >/dev/null 2>&1; then
+            partx -d "$dev" 2>/dev/null || true
+        fi
+      done
+
+# Notify kernel that subsequent partitions were removed
+partprobe "$DISK" 2>/dev/null || partx -u "$DISK" 2>/dev/null || true
+sleep 1
+
+# ---------------------------------------------------------------------------
+# 4. Fix misplaced GPT backup header
+# ---------------------------------------------------------------------------
 logger -t "expand-rootfs" "Fixing GPT backup header if necessary..."
-# When a smaller image is flashed to a larger SD card, the GPT backup header
-# ends up in the middle of the disk. 'parted resizepart 100%' then fails with
-# "Can't have overlapping partitions" because 100% is computed relative to the
-# misplaced backup header, not the real disk end.
-#
-# Fix strategy using ONLY parted (default lightweight tool):
-#   1. Use 'parted ---pretend-input-tty' with 'Fix' to relocate the backup GPT
-#      header to the real end of the disk. This is a safe no-op on MBR disks.
-#   2. Force the kernel to re-read the updated partition table so parted sees
-#      the corrected layout before we call resizepart.
-#   3. Use 'parted unit s print' to compute the true last free sector and pass
-#      an explicit sector number '<N>s' to resizepart instead of '100%'.
 echo "Fix" | parted ---pretend-input-tty "$DISK" print >/dev/null 2>&1 || true
 
-# Force kernel to see the updated partition table
 partprobe "$DISK" 2>/dev/null || partx -u "$DISK" 2>/dev/null || true
-sleep 1  # give udev a moment to settle
+sleep 1
 
-logger -t "expand-rootfs" "Expanding partition $PART on disk $DISK..."
-# To avoid parted miscomputing '100%' on disks where the GPT backup header was just relocated,
-# we compute the last available free sector explicitly using sector units.
-PART_END="$(parted -s "$DISK" unit s print 2>/dev/null | awk -v p="$PART" '$1 == p {print $3}' | grep -oE '[0-9]+')"
-FREE_END="$(parted -s "$DISK" unit s print free 2>/dev/null | grep -i 'free space' | tail -n 1 | awk '{print $2}' | grep -oE '[0-9]+')"
+# ---------------------------------------------------------------------------
+# 5. Expand partition $PART to fill 100% of available space on the disk
+# ---------------------------------------------------------------------------
+logger -t "expand-rootfs" "Resizing partition $PART to 100%..."
+parted -s "$DISK" resizepart "$PART" 100%
 
-if [ -n "$FREE_END" ] && [ -n "$PART_END" ] && [ "$FREE_END" -gt "$PART_END" ] 2>/dev/null; then
-    logger -t "expand-rootfs" "Resizing partition $PART from ${PART_END}s to ${FREE_END}s..."
-    parted -s "$DISK" unit s resizepart "$PART" "${FREE_END}s"
+partprobe "$DISK" 2>/dev/null || partx -u "$DISK" 2>/dev/null || block auto
+sleep 1
+
+# ---------------------------------------------------------------------------
+# 6. Resize the filesystem inside the expanded partition
+# ---------------------------------------------------------------------------
+logger -t "expand-rootfs" "Determining filesystem to resize..."
+
+RESIZE_DEV=""
+
+# Find loop device backing /overlay (standard OpenWrt pattern)
+OVERLAY_LOOP="$(awk '$2 == "/overlay" && $1 ~ /^\/dev\/loop/ {print $1}' /proc/mounts 2>/dev/null | head -n 1)"
+
+if [ -n "$OVERLAY_LOOP" ]; then
+    RESIZE_DEV="$OVERLAY_LOOP"
+    logger -t "expand-rootfs" "Found loop-mounted overlay on $RESIZE_DEV inside expanded partition $TARGET_DEV"
+    # Refresh loop device capacity so it sees the enlarged underlying partition p2
+    losetup -c "$RESIZE_DEV" 2>/dev/null || true
 else
-    logger -t "expand-rootfs" "Fallback: Resizing partition $PART to 100%..."
-    parted -s "$DISK" resizepart "$PART" 100%
+    # Otherwise (e.g., ext4 root partition), resize the target partition directly
+    RESIZE_DEV="$TARGET_DEV"
+    logger -t "expand-rootfs" "Resizing physical block device $RESIZE_DEV directly..."
 fi
 
-# Reload partition table
-partx -u "$DISK" 2>/dev/null || block auto
-
-logger -t "expand-rootfs" "Resizing filesystem..."
-# OpenWrt squashfs overlay is typically attached via loop0
-if losetup -a 2>/dev/null | grep -q "/dev/loop0"; then
-    losetup -c /dev/loop0
-    resize2fs -f /dev/loop0
-else
-    resize2fs -f "$ROOT_DEV"
+# Detect filesystem type of the device to resize
+RESIZE_FSTYPE="$(awk -v dev="$RESIZE_DEV" '$1 == dev {print $3}' /proc/mounts 2>/dev/null | head -n 1)"
+if [ -z "$RESIZE_FSTYPE" ] || [ "$RESIZE_FSTYPE" = "rootfs" ]; then
+    RESIZE_FSTYPE="$(block info "$RESIZE_DEV" 2>/dev/null | grep -oE 'TYPE="[^"]+"' | cut -d'"' -f2)"
 fi
+
+logger -t "expand-rootfs" "Resizing filesystem on $RESIZE_DEV (type: '${RESIZE_FSTYPE:-unknown}')..."
+
+case "$RESIZE_FSTYPE" in
+    f2fs)
+        if command -v resize.f2fs >/dev/null 2>&1; then
+            resize.f2fs "$RESIZE_DEV"
+        else
+            logger -t "expand-rootfs" "Error: resize.f2fs not found. Cannot resize f2fs filesystem."
+        fi
+        ;;
+    ext4|ext3|ext2)
+        if command -v resize2fs >/dev/null 2>&1; then
+            resize2fs -f "$RESIZE_DEV"
+        else
+            logger -t "expand-rootfs" "Error: resize2fs not found. Cannot resize ext filesystem."
+        fi
+        ;;
+    *)
+        logger -t "expand-rootfs" "Warning: unknown filesystem type '$RESIZE_FSTYPE'. Attempting resize2fs and resize.f2fs..."
+        resize2fs -f "$RESIZE_DEV" 2>/dev/null || resize.f2fs "$RESIZE_DEV" 2>/dev/null || true
+        ;;
+esac
 
 logger -t "expand-rootfs" "Rootfs expansion completed successfully."
 
