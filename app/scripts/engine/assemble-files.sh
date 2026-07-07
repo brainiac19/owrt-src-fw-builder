@@ -15,6 +15,18 @@ for s in config.get("shared_uci_defaults", []):
     print(s)
 ' "$PROFILE_DIR/profile.toml" || true)
 
+SHARED_PREINIT=$(python3 -c '
+import sys
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
+with open(sys.argv[1], "rb") as f:
+    config = tomllib.load(f)
+for s in config.get("shared_preinit", []):
+    print(s)
+' "$PROFILE_DIR/profile.toml" || true)
+
 STAGING_DIR="$WORKTREE_DIR/files"
 mkdir -p "$STAGING_DIR/etc/uci-defaults"
 
@@ -24,6 +36,14 @@ for s in $SHARED; do
     fi
 done
 
+mkdir -p "$STAGING_DIR/lib/preinit"
+for s in $SHARED_PREINIT; do
+    if [ -f "$BUILDER_ROOT/shared/preinit/$s" ]; then
+        cp "$BUILDER_ROOT/shared/preinit/$s" "$STAGING_DIR/lib/preinit/"
+    fi
+done
+
+
 if [ -d "$PROFILE_DIR/files" ]; then
     cp -r "$PROFILE_DIR/files/"* "$STAGING_DIR/" 2>/dev/null || true
 fi
@@ -32,10 +52,14 @@ if [ -d "/builder/uci-defaults-extra" ]; then
     cp -r /builder/uci-defaults-extra/* "$STAGING_DIR/etc/uci-defaults/" 2>/dev/null || true
 fi
 
-# Ensure all scripts in init.d and uci-defaults are executable
+# Ensure all scripts in init.d, uci-defaults, and preinit are executable
 if [ -d "$STAGING_DIR/etc/uci-defaults" ]; then
     find "$STAGING_DIR/etc/uci-defaults" -type f -exec chmod +x {} + 2>/dev/null || true
 fi
 if [ -d "$STAGING_DIR/etc/init.d" ]; then
     find "$STAGING_DIR/etc/init.d" -type f -exec chmod +x {} + 2>/dev/null || true
 fi
+if [ -d "$STAGING_DIR/lib/preinit" ]; then
+    find "$STAGING_DIR/lib/preinit" -type f -exec chmod +x {} + 2>/dev/null || true
+fi
+
