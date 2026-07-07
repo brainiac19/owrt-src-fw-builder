@@ -1,16 +1,43 @@
 #!/bin/sh
-# /lib/preinit/79_expand_rootfs
+# /lib/preinit/81_expand_rootfs
 # Unified rootfs partition and overlay filesystem auto-expansion.
 #
-# Runs every boot during preinit (before 80_mount_root mounts /overlay).
+# NOTE ON FILENAME: this MUST sort/execute after 80_mount_root within the
+# "preinit_mount_root" hook, or do_expand_overlay will run before the
+# overlay (loop device) even exists. If your preinit framework's hook
+# execution order is NOT tied to file-sourcing order (i.e. the hook point
+# "preinit_mount_root" is invoked explicitly by mount_root's own script
+# after it mounts, regardless of registration order), the filename number
+# doesn't matter -- but don't assume that, verify it (see the assertion
+# log line at the top of do_expand_overlay below: check
+# `logread | grep expand-rootfs` after a boot and confirm you see
+# "overlay mounted, proceeding" rather than "overlay NOT mounted yet").
 #
-# Why preinit?
-# 1. Zero reboots: Partition expansion and unmounted filesystem resize happen in one pass
-#    before mount_root runs. On first boot, the router comes up 100% expanded.
-# 2. Idempotent & stateless: Checks physical sector counts in /sys/class/block/ and skips
-#    partition table operations if less than ~4MB free space remains.
-# 3. F2FS compatible: f2fs does not support online resizing. In preinit, /overlay is not
-#    yet mounted, allowing resize.f2fs to safely grow the filesystem offline.
+# CHANGELOG vs original 79_expand_rootfs:
+#   - do_expand_rootfs no longer trusts the /etc/rootfs-expanded marker as
+#     a skip condition (it can never be true at preinit_main time -- nothing
+#     is mounted yet, so the check was dead code). Idempotency for the
+#     partition resize is provided by the free_sectors calculation (already
+#     correct). Idempotency for the ext4-direct resize2fs call is now
+#     provided by an actual size comparison instead of running
+#     unconditionally + forced-fsck every boot.
+#   - Added a sanity check that target_dev really is a partition
+#     (/sys/class/block/<part>/partition must exist) before trusting the
+#     disk-name parsing.
+#   - do_expand_overlay now logs+asserts whether the overlay is actually
+#     mounted when it starts, so you can confirm hook ordering empirically.
+#   - Partition removal after the target unconditionally wipes everything
+#     numbered higher than the rootfs/overlay partition. Appropriate for
+#     SD/eMMC/USB/NVMe-booting general-purpose boards (Pi-likes, x86/aarch64
+#     mini PCs) with a standard MBR/GPT table, where anything after rootfs
+#     is leftover cruft from the card's previous life, not vendor-reserved
+#     data. This script is NOT intended for router-class devices with NAND/
+#     UBI storage or vendor dual-firmware/calibration partitions -- those
+#     need per-device handling, not a generic "wipe everything after p2".
+#   - parted's "Fix" prompt output is logged instead of discarded.
+#   - Tool availability (parted/partprobe/partx/resize2fs/resize.f2fs) is
+#     checked with command -v before use, with a clear log message if
+#     missing, instead of silently swallowing failures via `|| true`.
 
 log_msg() {
     echo "expand-rootfs: $*" > /dev/kmsg 2>/dev/null || true
@@ -18,17 +45,21 @@ log_msg() {
 }
 
 do_expand_rootfs() {
-    if [ -f /etc/rootfs-expanded ] || [ -f /overlay/upper/etc/rootfs-expanded ] || [ -f /tmp/overlay/upper/etc/rootfs-expanded ]; then
-        log_msg "Rootfs already expanded, skipping partition check."
+    log_msg "Starting rootfs partition expansion check..."
+
+    if command -v lock >/dev/null 2>&1; then
+        if ! lock -n /var/lock/expand-rootfs; then
+            log_msg "Could not acquire /var/lock/expand-rootfs (already running?). Skipping this pass."
+            return 0
+        fi
+    fi
+
+    if ! command -v parted >/dev/null 2>&1; then
+        log_msg "parted not found, cannot expand partition table. Skipping."
         return 0
     fi
 
-    log_msg "Starting rootfs partition expansion check..."
-
     # 1. Find physical (non-loop) block device backing root/overlay.
-    #    NOTE: In preinit_main, /overlay is NOT yet mounted (that happens in 80_mount_root).
-    #    We look for /rom (squashfs rootfs) or / as the anchor to identify the disk.
-    #    The actual partition we expand may be the last partition on that disk.
     local target_dev
     target_dev="$(block info 2>/dev/null | grep 'MOUNT="/overlay"' | grep -v '^/dev/loop' | head -n 1 | cut -d: -f1)"
     if [ -z "$target_dev" ]; then
@@ -38,7 +69,6 @@ do_expand_rootfs() {
         target_dev="$(block info 2>/dev/null | grep 'MOUNT="/"' | grep -v '^/dev/loop' | head -n 1 | cut -d: -f1)"
     fi
     if [ -z "$target_dev" ]; then
-        # Last resort: find last partition on first non-loop disk via /sys
         local disk_name
         disk_name="$(ls /sys/class/block/ 2>/dev/null | grep -v loop | grep -v '^[0-9]' | grep -v '^ram' | head -n 1)"
         if [ -n "$disk_name" ]; then
@@ -50,13 +80,12 @@ do_expand_rootfs() {
         fi
     fi
     if [ -z "$target_dev" ]; then
-        log_msg "Could not determine block device. Skipping."
+        log_msg "Could not determine block device (no partition table? UBI/NAND target?). Skipping."
         return 0
     fi
 
     log_msg "Target block device: $target_dev"
 
-    # Resolve /dev/root or symlinks to actual block device
     if [ "$target_dev" = "/dev/root" ] || [ -L "$target_dev" ]; then
         target_dev="$(readlink -f "$target_dev" 2>/dev/null || echo "$target_dev")"
     fi
@@ -84,25 +113,32 @@ do_expand_rootfs() {
         return 0
     fi
 
+    local part_basename="${target_dev##*/}"
+    # Sanity check: confirm this is actually a kernel-recognized partition,
+    # not an accidental mis-parse of a whole-disk device name.
+    if [ ! -e "/sys/class/block/${part_basename}/partition" ]; then
+        log_msg "WARNING: $target_dev does not look like a partition (no /sys/class/block/${part_basename}/partition). Skipping to avoid corrupting a whole disk device."
+        return 0
+    fi
+
     log_msg "Disk: $disk  Partition: $part"
 
-    # 3. Check physical sector counts to determine if partition expansion is needed
     local disk_basename="${disk##*/}"
-    local part_basename="${target_dev##*/}"
-    
-    local disk_sectors="$(cat "/sys/class/block/${disk_basename}/size" 2>/dev/null || echo 0)"
-    local part_start="$(cat "/sys/class/block/${part_basename}/start" 2>/dev/null || echo 0)"
-    local part_sectors="$(cat "/sys/class/block/${part_basename}/size" 2>/dev/null || echo 0)"
-    local part_end=$((part_start + part_sectors))
-    local free_sectors=$((disk_sectors - part_end))
+    local disk_sectors part_start part_sectors part_end free_sectors
+    disk_sectors="$(cat "/sys/class/block/${disk_basename}/size" 2>/dev/null || echo 0)"
+    part_start="$(cat "/sys/class/block/${part_basename}/start" 2>/dev/null || echo 0)"
+    part_sectors="$(cat "/sys/class/block/${part_basename}/size" 2>/dev/null || echo 0)"
+    part_end=$((part_start + part_sectors))
+    free_sectors=$((disk_sectors - part_end))
 
     log_msg "Disk size: $disk_sectors sectors, partition end: $part_end, free: $free_sectors sectors"
 
-    # If more than ~4MB (8192 sectors of 512B) is unallocated after target partition, expand it
+    local resized=0
+
     if [ "$disk_sectors" -gt 0 ] && [ "$free_sectors" -gt 8192 ]; then
         log_msg "Found $((free_sectors / 2048)) MB unallocated disk space. Expanding partition $part on $disk..."
+        resized=1
 
-        # Remove any subsequent partitions (e.g. p3, p4 after p2)
         parted -s "$disk" unit s print 2>/dev/null \
             | awk -v p="$part" '$1 ~ /^[0-9]+$/ && $1 > p {print $1}' \
             | while read -r pnum; do
@@ -119,16 +155,24 @@ do_expand_rootfs() {
                 fi
               done
 
-        # Notify kernel of partition removals
-        partprobe "$disk" 2>/dev/null || partx -u "$disk" 2>/dev/null || true
+        if command -v partprobe >/dev/null 2>&1; then
+            partprobe "$disk" 2>/dev/null || true
+        elif command -v partx >/dev/null 2>&1; then
+            partx -u "$disk" 2>/dev/null || true
+        else
+            log_msg "WARNING: neither partprobe nor partx available; kernel may not see partition table changes."
+        fi
         sleep 1
 
-        # Fix misplaced or damaged GPT backup header if necessary (e.g. from previous power loss)
-        printf "Fix\nOK\nIgnore\n" | parted ---pretend-input-tty "$disk" print >/dev/null 2>&1 || true
-        partprobe "$disk" 2>/dev/null || partx -u "$disk" 2>/dev/null || true
+        printf "Fix\nOK\nIgnore\n" | parted ---pretend-input-tty "$disk" print 2>&1 \
+            | while read -r l; do log_msg "parted fix-check: $l"; done || true
+        if command -v partprobe >/dev/null 2>&1; then
+            partprobe "$disk" 2>/dev/null || true
+        elif command -v partx >/dev/null 2>&1; then
+            partx -u "$disk" 2>/dev/null || true
+        fi
         sleep 1
 
-        # Resize target partition to 100%
         log_msg "Executing: parted -s $disk resizepart $part 100%"
         local out rc
         out="$(parted -s "$disk" resizepart "$part" 100% 2>&1)"
@@ -142,15 +186,27 @@ do_expand_rootfs() {
             log_msg "WARNING: parted resizepart exited with code $rc."
         fi
 
-        printf "Fix\nOK\nIgnore\n" | parted ---pretend-input-tty "$disk" print >/dev/null 2>&1 || true
-        partprobe "$disk" 2>/dev/null || partx -u "$disk" 2>/dev/null || block auto >/dev/null 2>&1 || true
+        printf "Fix\nOK\nIgnore\n" | parted ---pretend-input-tty "$disk" print 2>&1 \
+            | while read -r l; do log_msg "parted fix-check: $l"; done || true
+        if command -v partprobe >/dev/null 2>&1; then
+            partprobe "$disk" 2>/dev/null || true
+        elif command -v partx >/dev/null 2>&1; then
+            partx -u "$disk" 2>/dev/null || true
+        else
+            block auto >/dev/null 2>&1 || true
+        fi
         sleep 1
         log_msg "Partition expansion step finished."
     else
         log_msg "Partition already fully allocated (free: $free_sectors sectors). No partition expansion needed."
     fi
 
-    # 4. For direct ext4/ext3/ext2 non-overlay partitions, resize filesystem immediately
+    # 4. For direct ext4/ext3/ext2 non-overlay partitions, resize filesystem
+    #    if (and only if) the filesystem is actually smaller than the
+    #    partition. This replaces the old "run unconditionally every boot
+    #    with -f forced fsck" behavior, which was both wasteful and the only
+    #    thing standing in for idempotency (the marker file check above it
+    #    never worked, since nothing is mounted yet at this preinit stage).
     local root_fstype
     root_fstype="$(block info "$target_dev" 2>/dev/null | grep -oE 'TYPE="[^"]+"' | cut -d'"' -f2)"
     if [ -z "$root_fstype" ]; then
@@ -158,21 +214,37 @@ do_expand_rootfs() {
     fi
 
     if [ "$root_fstype" = "ext4" ] || [ "$root_fstype" = "ext3" ] || [ "$root_fstype" = "ext2" ]; then
-        if command -v resize2fs >/dev/null 2>&1; then
-            log_msg "Direct $root_fstype rootfs detected. Running resize2fs on $target_dev..."
-            local out rc
-            out="$(resize2fs -f "$target_dev" 2>&1)"
-            rc=$?
-            if [ -n "$out" ]; then
-                echo "$out" | while read -r l; do log_msg "resize2fs: $l"; done
-            fi
-            if [ $rc -ne 0 ]; then
-                log_msg "Direct $root_fstype rootfs resize failed (rc=$rc). Running e2fsck..."
-                if command -v e2fsck >/dev/null 2>&1; then
-                    e2fsck -p -f "$target_dev" 2>&1 | while read -r l; do log_msg "e2fsck: $l"; done || e2fsck -y "$target_dev" 2>&1 | while read -r l; do log_msg "e2fsck: $l"; done || true
+        if command -v resize2fs >/dev/null 2>&1 && command -v dumpe2fs >/dev/null 2>&1; then
+            local fs_blocks fs_blocksize fs_bytes part_bytes need_resize=1
+            fs_blocks="$(dumpe2fs -h "$target_dev" 2>/dev/null | awk -F: '/Block count/{gsub(/[ \t]/,"",$2); print $2}')"
+            fs_blocksize="$(dumpe2fs -h "$target_dev" 2>/dev/null | awk -F: '/Block size/{gsub(/[ \t]/,"",$2); print $2}')"
+            if [ -n "$fs_blocks" ] && [ -n "$fs_blocksize" ]; then
+                fs_bytes=$((fs_blocks * fs_blocksize))
+                part_bytes=$((part_sectors * 512))
+                # allow up to one block of slack (alignment rounding)
+                if [ $((part_bytes - fs_bytes)) -lt "$fs_blocksize" ]; then
+                    need_resize=0
                 fi
-                log_msg "Retrying $root_fstype resize after e2fsck..."
-                resize2fs -f "$target_dev" 2>&1 | while read -r l; do log_msg "resize2fs retry: $l"; done || true
+            fi
+
+            if [ "$resized" -eq 1 ] || [ "$need_resize" -eq 1 ]; then
+                log_msg "$root_fstype rootfs on $target_dev needs growing (fs_bytes=${fs_bytes:-unknown}, part_bytes=${part_bytes:-unknown}). Running resize2fs..."
+                local out rc
+                out="$(resize2fs "$target_dev" 2>&1)"
+                rc=$?
+                if [ -n "$out" ]; then
+                    echo "$out" | while read -r l; do log_msg "resize2fs: $l"; done
+                fi
+                if [ $rc -ne 0 ]; then
+                    log_msg "$root_fstype rootfs resize failed (rc=$rc). Running e2fsck..."
+                    if command -v e2fsck >/dev/null 2>&1; then
+                        e2fsck -p -f "$target_dev" 2>&1 | while read -r l; do log_msg "e2fsck: $l"; done || e2fsck -y "$target_dev" 2>&1 | while read -r l; do log_msg "e2fsck: $l"; done || true
+                    fi
+                    log_msg "Retrying $root_fstype resize after e2fsck..."
+                    resize2fs "$target_dev" 2>&1 | while read -r l; do log_msg "resize2fs retry: $l"; done || true
+                fi
+            else
+                log_msg "$root_fstype rootfs on $target_dev already matches partition size. Skipping resize2fs."
             fi
         fi
     fi
@@ -180,31 +252,73 @@ do_expand_rootfs() {
 
 do_expand_overlay() {
     if [ -f /etc/rootfs-expanded ] || [ -f /overlay/upper/etc/rootfs-expanded ] || [ -f /tmp/overlay/upper/etc/rootfs-expanded ]; then
+        log_msg "Overlay already expanded (marker found), skipping."
         return 0
     fi
 
-    # In standard squashfs+overlayfs architecture, the F2FS/ext4 overlay lives on /dev/loop0 after squashfs.
-    # In preinit_main (before 80_mount_root), /dev/loop0 DOES NOT EXIST YET.
-    # At 80_mount_root, libfstools creates /dev/loop0 spanning the newly expanded partition and mounts it at /tmp/overlay.
-    # Here in preinit_mount_root (right after 80_mount_root), loop0 exists so we can cleanly resize it.
+    if command -v lock >/dev/null 2>&1; then
+        if ! lock -n /var/lock/expand-rootfs; then
+            log_msg "Could not acquire /var/lock/expand-rootfs (already running?). Skipping this pass."
+            return 0
+        fi
+    fi
+
+    # Reset the failure sentinel for this boot; do_mark_rootfs_expanded will
+    # only write the "done" marker if this file is still absent by the time
+    # it runs. Any resize failure below (after retry) creates it.
+    rm -f /tmp/expand-rootfs.fail 2>/dev/null
+
     block detect >/dev/null 2>&1 || true
     block info >/dev/null 2>&1 || true
 
+    # Sanity check: this function's whole design assumes /tmp/overlay (or
+    # /overlay) is ALREADY mounted by the time it runs. If it isn't, that
+    # means this file is being sourced/hooked BEFORE 80_mount_root within
+    # the same hook point, and you need to rename this file to sort after
+    # it (see header comment).
+    if grep -qE ' /tmp/overlay | /overlay ' /proc/mounts 2>/dev/null; then
+        log_msg "Overlay mounted, proceeding with resize check."
+    else
+        log_msg "WARNING: overlay NOT mounted yet at do_expand_overlay start. Hook ordering assumption is wrong for this build -- rename this file to run after 80_mount_root. Skipping this boot."
+        return 0
+    fi
+
+    local overlay_dev overlay_mountpoint
+    overlay_mountpoint="$(awk '$5 == "/overlay" || $5 == "/tmp/overlay" {print $5; exit}' /proc/self/mountinfo 2>/dev/null)"
+    if [ -z "$overlay_mountpoint" ]; then
+        overlay_mountpoint="$(awk '$2 == "/overlay" || $2 == "/tmp/overlay" {print $2; exit}' /proc/mounts 2>/dev/null)"
+    fi
+    if [ -z "$overlay_mountpoint" ]; then
+        log_msg "Could not identify a mounted /overlay or /tmp/overlay. Nothing to resize."
+        return 0
+    fi
+    overlay_dev="$(awk -v m="$overlay_mountpoint" '$2 == m {print $1; exit}' /proc/mounts 2>/dev/null)"
+    if [ -z "$overlay_dev" ]; then
+        log_msg "Could not identify the block device backing $overlay_mountpoint. Skipping."
+        return 0
+    fi
+
     local dev fstype mountpoint
-    for dev in $(block info 2>/dev/null | grep -E 'TYPE="(f2fs|ext[234])"' | cut -d: -f1); do
+    for dev in "$overlay_dev"; do
         fstype="$(block info "$dev" 2>/dev/null | grep -oE 'TYPE="[^"]+"' | cut -d'"' -f2)"
-        mountpoint="$(awk -v d="$dev" '$1 == d || $2 == d {print $2}' /proc/mounts 2>/dev/null | head -n 1)"
-        if [ -z "$mountpoint" ]; then
-            mountpoint="$(block info "$dev" 2>/dev/null | grep -oE 'MOUNT="[^"]+"' | cut -d'"' -f2)"
+        if [ -z "$fstype" ]; then
+            fstype="$(awk -v d="$dev" '$1 == d {print $3; exit}' /proc/mounts 2>/dev/null)"
         fi
+        mountpoint="$overlay_mountpoint"
+
+        case "$fstype" in
+            f2fs|ext4|ext3|ext2) : ;;
+            *)
+                log_msg "Overlay device $dev has unrecognized/unsupported fstype '$fstype'. Skipping."
+                continue
+                ;;
+        esac
 
         log_msg "Checking overlay filesystem on $dev ($fstype, mount: ${mountpoint:-none})..."
 
         case "$fstype" in
             f2fs)
                 if command -v resize.f2fs >/dev/null 2>&1; then
-                    # f2fs strictly requires offline resizing. Since preinit hasn't switched root to procd yet,
-                    # unmounting /tmp/overlay is safe and will not fail with device busy.
                     if [ -n "$mountpoint" ] && grep -q " $dev " /proc/mounts 2>/dev/null; then
                         log_msg "Temporarily unmounting $dev from $mountpoint for offline F2FS resize..."
                         umount -l "$dev" 2>/dev/null || umount "$mountpoint" 2>/dev/null || true
@@ -225,14 +339,19 @@ do_expand_overlay() {
                             fsck.f2fs -a "$dev" 2>&1 | while read -r l; do log_msg "fsck.f2fs: $l"; done || fsck.f2fs -f "$dev" 2>&1 | while read -r l; do log_msg "fsck.f2fs: $l"; done || true
                         fi
                         log_msg "Retrying f2fs overlay resize after fsck..."
-                        resize.f2fs "$dev" 2>&1 | while read -r l; do log_msg "resize.f2fs retry: $l"; done || true
+                        if ! resize.f2fs "$dev" 2>&1 | while read -r l; do log_msg "resize.f2fs retry: $l"; done; then
+                            log_msg "f2fs overlay resize still failing after fsck retry on $dev. Will NOT mark as done -- will retry next boot."
+                            touch /tmp/expand-rootfs.fail 2>/dev/null
+                        fi
                     fi
 
-                    # Remount if unmounted
                     if [ -n "$mountpoint" ] && ! grep -q " $dev " /proc/mounts 2>/dev/null; then
                         log_msg "Remounting $dev to $mountpoint..."
                         mount "$dev" "$mountpoint" 2>/dev/null || block mount >/dev/null 2>&1 || true
                     fi
+                else
+                    log_msg "resize.f2fs not available, cannot grow f2fs overlay $dev."
+                    touch /tmp/expand-rootfs.fail 2>/dev/null
                 fi
                 ;;
             ext4|ext3|ext2)
@@ -252,8 +371,14 @@ do_expand_overlay() {
                             e2fsck -p -f "$dev" 2>&1 | while read -r l; do log_msg "e2fsck: $l"; done || e2fsck -y "$dev" 2>&1 | while read -r l; do log_msg "e2fsck: $l"; done || true
                         fi
                         log_msg "Retrying $fstype overlay resize after e2fsck..."
-                        resize2fs -f "$dev" 2>&1 | while read -r l; do log_msg "resize2fs retry: $l"; done || true
+                        if ! resize2fs -f "$dev" 2>&1 | while read -r l; do log_msg "resize2fs retry: $l"; done; then
+                            log_msg "$fstype overlay resize still failing after e2fsck retry on $dev. Will NOT mark as done -- will retry next boot."
+                            touch /tmp/expand-rootfs.fail 2>/dev/null
+                        fi
                     fi
+                else
+                    log_msg "resize2fs not available, cannot grow $fstype overlay $dev."
+                    touch /tmp/expand-rootfs.fail 2>/dev/null
                 fi
                 ;;
         esac
@@ -261,9 +386,14 @@ do_expand_overlay() {
 }
 
 do_mark_rootfs_expanded() {
+    if [ -f /tmp/expand-rootfs.fail ]; then
+        log_msg "A resize step failed this boot (see /tmp/expand-rootfs.fail trigger above). NOT writing the done marker, so this will be retried next boot instead of being silently considered complete."
+        return 0
+    fi
     touch /etc/rootfs-expanded 2>/dev/null || true
     touch /overlay/upper/etc/rootfs-expanded 2>/dev/null || true
     touch /tmp/overlay/upper/etc/rootfs-expanded 2>/dev/null || true
+    log_msg "Rootfs/overlay expansion marked complete."
 }
 
 boot_hook_add preinit_main do_expand_rootfs
