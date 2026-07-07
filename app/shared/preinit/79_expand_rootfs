@@ -113,7 +113,7 @@ do_expand_rootfs() {
                     umount -l "$dev_rm" 2>/dev/null || true
                     swapoff "$dev_rm" 2>/dev/null || true
                 fi
-                parted -s "$disk" rm "$pnum" 2>/dev/null || true
+                parted -s "$disk" rm "$pnum" 2>&1 | while read -r l; do log_msg "parted rm: $l"; done || true
                 if [ -n "$dev_rm" ] && command -v partx >/dev/null 2>&1; then
                     partx -d "$dev_rm" 2>/dev/null || true
                 fi
@@ -129,11 +129,23 @@ do_expand_rootfs() {
         sleep 1
 
         # Resize target partition to 100%
-        parted -s "$disk" resizepart "$part" 100%
+        log_msg "Executing: parted -s $disk resizepart $part 100%"
+        local out rc
+        out="$(parted -s "$disk" resizepart "$part" 100% 2>&1)"
+        rc=$?
+        if [ -n "$out" ]; then
+            echo "$out" | while read -r l; do log_msg "parted output: $l"; done
+        fi
+        if [ $rc -eq 0 ]; then
+            log_msg "parted resizepart completed successfully."
+        else
+            log_msg "WARNING: parted resizepart exited with code $rc."
+        fi
+
         printf "Fix\nOK\nIgnore\n" | parted ---pretend-input-tty "$disk" print >/dev/null 2>&1 || true
         partprobe "$disk" 2>/dev/null || partx -u "$disk" 2>/dev/null || block auto >/dev/null 2>&1 || true
         sleep 1
-        log_msg "Partition expansion complete."
+        log_msg "Partition expansion step finished."
     else
         log_msg "Partition already fully allocated (free: $free_sectors sectors). No partition expansion needed."
     fi
@@ -148,13 +160,19 @@ do_expand_rootfs() {
     if [ "$root_fstype" = "ext4" ] || [ "$root_fstype" = "ext3" ] || [ "$root_fstype" = "ext2" ]; then
         if command -v resize2fs >/dev/null 2>&1; then
             log_msg "Direct $root_fstype rootfs detected. Running resize2fs on $target_dev..."
-            if ! resize2fs -f "$target_dev" >/dev/null 2>&1; then
-                log_msg "Direct $root_fstype rootfs resize failed or dirty on $target_dev. Running e2fsck..."
+            local out rc
+            out="$(resize2fs -f "$target_dev" 2>&1)"
+            rc=$?
+            if [ -n "$out" ]; then
+                echo "$out" | while read -r l; do log_msg "resize2fs: $l"; done
+            fi
+            if [ $rc -ne 0 ]; then
+                log_msg "Direct $root_fstype rootfs resize failed (rc=$rc). Running e2fsck..."
                 if command -v e2fsck >/dev/null 2>&1; then
-                    e2fsck -p -f "$target_dev" >/dev/null 2>&1 || e2fsck -y "$target_dev" >/dev/null 2>&1 || true
+                    e2fsck -p -f "$target_dev" 2>&1 | while read -r l; do log_msg "e2fsck: $l"; done || e2fsck -y "$target_dev" 2>&1 | while read -r l; do log_msg "e2fsck: $l"; done || true
                 fi
                 log_msg "Retrying $root_fstype resize after e2fsck..."
-                resize2fs -f "$target_dev" >/dev/null 2>&1 || true
+                resize2fs -f "$target_dev" 2>&1 | while read -r l; do log_msg "resize2fs retry: $l"; done || true
             fi
         fi
     fi
@@ -192,14 +210,22 @@ do_expand_overlay() {
                         umount -l "$dev" 2>/dev/null || umount "$mountpoint" 2>/dev/null || true
                     fi
 
-                    log_msg "Running resize.f2fs on $dev..."
-                    if ! resize.f2fs "$dev" >/dev/null 2>&1; then
-                        log_msg "f2fs overlay resize failed or dirty on $dev. Running fsck.f2fs..."
+                    log_msg "Executing: resize.f2fs $dev"
+                    local out rc
+                    out="$(resize.f2fs "$dev" 2>&1)"
+                    rc=$?
+                    if [ -n "$out" ]; then
+                        echo "$out" | while read -r l; do log_msg "resize.f2fs output: $l"; done
+                    fi
+                    if [ $rc -eq 0 ]; then
+                        log_msg "resize.f2fs completed successfully on $dev."
+                    else
+                        log_msg "f2fs overlay resize failed (rc=$rc). Running fsck.f2fs..."
                         if command -v fsck.f2fs >/dev/null 2>&1; then
-                            fsck.f2fs -a "$dev" >/dev/null 2>&1 || fsck.f2fs -f "$dev" >/dev/null 2>&1 || true
+                            fsck.f2fs -a "$dev" 2>&1 | while read -r l; do log_msg "fsck.f2fs: $l"; done || fsck.f2fs -f "$dev" 2>&1 | while read -r l; do log_msg "fsck.f2fs: $l"; done || true
                         fi
                         log_msg "Retrying f2fs overlay resize after fsck..."
-                        resize.f2fs "$dev" >/dev/null 2>&1 || true
+                        resize.f2fs "$dev" 2>&1 | while read -r l; do log_msg "resize.f2fs retry: $l"; done || true
                     fi
 
                     # Remount if unmounted
@@ -211,14 +237,22 @@ do_expand_overlay() {
                 ;;
             ext4|ext3|ext2)
                 if command -v resize2fs >/dev/null 2>&1; then
-                    log_msg "Running resize2fs on $dev..."
-                    if ! resize2fs -f "$dev" >/dev/null 2>&1; then
-                        log_msg "$fstype overlay resize failed or dirty on $dev. Running e2fsck..."
+                    log_msg "Executing: resize2fs -f $dev"
+                    local out rc
+                    out="$(resize2fs -f "$dev" 2>&1)"
+                    rc=$?
+                    if [ -n "$out" ]; then
+                        echo "$out" | while read -r l; do log_msg "resize2fs output: $l"; done
+                    fi
+                    if [ $rc -eq 0 ]; then
+                        log_msg "resize2fs completed successfully on $dev."
+                    else
+                        log_msg "$fstype overlay resize failed (rc=$rc). Running e2fsck..."
                         if command -v e2fsck >/dev/null 2>&1; then
-                            e2fsck -p -f "$dev" >/dev/null 2>&1 || e2fsck -y "$dev" >/dev/null 2>&1 || true
+                            e2fsck -p -f "$dev" 2>&1 | while read -r l; do log_msg "e2fsck: $l"; done || e2fsck -y "$dev" 2>&1 | while read -r l; do log_msg "e2fsck: $l"; done || true
                         fi
                         log_msg "Retrying $fstype overlay resize after e2fsck..."
-                        resize2fs -f "$dev" >/dev/null 2>&1 || true
+                        resize2fs -f "$dev" 2>&1 | while read -r l; do log_msg "resize2fs retry: $l"; done || true
                     fi
                 fi
                 ;;
