@@ -11,8 +11,10 @@ echo "==> Packing ccache into $IMAGE_NAME (Iterative Layering)..."
 
 if docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
     IMAGE_EXISTS=1
+    EXISTING_CACHE_FILES=$(docker run --rm --entrypoint ls "$IMAGE_NAME" /cache 2>/dev/null || true)
 else
     IMAGE_EXISTS=0
+    EXISTING_CACHE_FILES=""
 fi
 
 if [ ! -d ".ccache" ]; then
@@ -35,8 +37,26 @@ for b in $(ls -A .ccache 2>/dev/null); do
         continue
     fi
 
+    # Skip ephemeral directories and lock files
+    case "$b" in
+        lock|tmp|CACHEDIR.TAG|*.lock|*.tmp|*.stats)
+            echo "  -> Skipping ephemeral item $b"
+            rm -rf ".ccache/$b"
+            continue
+            ;;
+    esac
+
+    # Only process standard 16 hex ccache bucket directories and ccache.conf
+    if [[ ! "$b" =~ ^[0-9a-fA-F]$ ]] && [ "$b" != "ccache.conf" ]; then
+        echo "  -> Skipping non-cache item $b"
+        rm -rf ".ccache/$b"
+        continue
+    fi
+
     CHANGED=0
     if [ "$IMAGE_EXISTS" -eq 0 ]; then
+        CHANGED=1
+    elif ! echo "$EXISTING_CACHE_FILES" | grep -F -x -q "$b.tar.zst.enc"; then
         CHANGED=1
     elif [ -f ".build-start" ]; then
         if [[ "$b" == *stats* ]]; then

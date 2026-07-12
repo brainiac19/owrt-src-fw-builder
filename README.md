@@ -7,9 +7,10 @@ For a deeper overview of the architecture and comprehensive implementation detai
 ## Key Features
 
 - **Official Package ABI Compatibility (`vermagic` Override):** Set `vermagic = "<hash>"` in `profile.toml` to align your kernel module hash with official OpenWrt/ImmortalWrt release snapshots. The build engine automatically intercepts kernel Makefile generation and purges stale out-of-tree kmod packages on incremental builds so official repository `kmod-*` packages install cleanly without `kernel=...` dependency mismatch errors.
-- **Upstream Source Pinning (`tag` / `commit` / `branch`):** Pin device profiles to specific release tags (`tag = "v23.05.5"`), exact commit SHAs (`commit = "..."`), or tracking branches (`branch = "..."`). All profiles share a single lightweight object store with detached git worktrees.
+- **Upstream Source Pinning & Auto-Sync (`tag` / `commit` / `branch`):** Pin device profiles to specific release tags (`tag = "v23.05.5"`), exact commit SHAs (`commit = "..."`), or tracking branches (`branch = "..."`). The build engine automatically detects upstream repository URL changes or profile switches and synchronizes shared source worktrees cleanly.
+- **Strict Feed Priorities & Drift Protection:** Enforce custom feed priorities (`extra_feeds`) over upstream defaults. The builder hashes `feeds.conf` and automatically cleans/force-updates feed checkouts when feeds configurations change or when `--fresh` is used.
 - **Log & Package Name Obfuscation (`--obfuscate`):** Pass `--obfuscate` to redact sensitive package names, feed URLs, and directory paths (`***`) on public console stdout while writing complete unredacted diagnostic logs (`setup.log`, `download.log`, `build.log`) to encrypted archives.
-- **Strict Feed Priorities & Dynamic Overlay Assembly:** Enforce custom feed priorities (`extra_feeds`) over upstream defaults and freshly inject profile overlay files (`files/`) on every build run.
+- **Safe Docker Layer Caching:** When building remote CI caches (`source`, `dl`, `ccache`), the builder inspects layer existence in base container images before reusing layers, ensuring reliable multi-stage Docker builds.
 
 ## Quick Start (Local Build)
 

@@ -58,6 +58,7 @@ Profiles define their upstream source in `profile.toml` using `repo` and one of 
 - **Tag Pinning (`tag = "v23.05.5"`):** Clones only the target release tag shallowly (`git clone --depth=1 --branch "$TAG"`), ensuring reproducible release builds with minimal network and disk footprint.
 - **Commit SHA Pinning (`commit = "..."`):** Shallowly clones the target branch (`--depth=1 -b "$BRANCH"`), fetches the exact commit SHA (`git fetch --depth=1 origin "$COMMIT"`), and performs a hard reset (`git reset --hard FETCH_HEAD`) to lock the tree to an immutable revision.
 - **Branch Tracking (`branch = "openwrt-25.12"`):** Shallowly clones or fetches the tip of the remote branch (`git reset --hard "origin/$BRANCH"`).
+- **Automatic Remote & Revision Synchronization:** If a profile changes its target repository URL (`repo`), `fetch-source.sh` detects origin URL drift and automatically re-clones `/builder/source/main`. Whenever `source/main` updates or when `--fresh` (`FRESH_SETUP=1`) is passed, profile worktrees (`WORKTREE_DIR`) are automatically validated, reset (`git reset --hard "$MAIN_SHA"`), and cleaned.
 - **Detached Worktree Isolation:** Rather than duplicating git repositories across profiles, all profiles share a single object store (`/builder/source/main`) and check out isolated worktrees (`git worktree add --detach /builder/source/worktrees/$PROFILE HEAD`).
 
 #### 3. Log & Package Name Obfuscation (`filter_logs.py`)
@@ -69,8 +70,11 @@ To protect proprietary customizations, internal feed repositories, and custom pa
 - **Unredacted Diagnostic Artifacts:** While console stdout is sanitized for public CI logs, the full unredacted log stream is written concurrently to `BUILD_LOG_FILE` (`setup.log`, `download.log`, `build.log`). In CI, these logs are packed into a password-encrypted 7-zip archive so developers can debug failures without exposing package names in public build logs.
 
 #### 4. Dynamic Overlay Assembly & Strict Feed Prioritization
-- **Strict Feed Priorities:** Custom `extra_feeds` defined in `profile.toml` are prepended to OpenWrt feeds and enforced with `--force-overwrite` during `install-packages.sh`, allowing custom forks (e.g., `luci-app-mosdns`) to cleanly override upstream packages.
+- **Strict Feed Priorities & Drift Protection (`apply-feeds.sh`):** Custom `extra_feeds` defined in `profile.toml` are prepended to OpenWrt feeds and enforced with `--force-overwrite` during `install-packages.sh`. The engine tracks `feeds.conf` changes via SHA256 hashing (`.feeds.conf.hash`); whenever feed URLs/branches change or `--fresh` is passed, existing feed checkouts (`feeds/` and `package/feeds/`) are cleaned before force-updating (`./scripts/feeds update -a -f`).
 - **Dynamic File Injection:** Profile overlay files (`files/`) and shared base scripts (`uci-defaults`, `preinit`) are freshly assembled into OpenWrt's target overlay directory on every build run so modified configurations take effect immediately without requiring a full clean.
+
+#### 5. Safe Docker Layer Caching (`pack-*.sh`)
+When packaging source (`pack-source.sh`), downloads (`pack-dl.sh`), and compiler caches (`pack-ccache.sh`) into OCI images on GHCR, the engine inspects the base image layer contents (`docker run --rm --entrypoint ls "$IMAGE_NAME" /cache`). It verifies layer existence before emitting `COPY --from=$IMAGE_NAME ...` directives, preventing `not found` Docker build errors when reusing cache images across incremental builds.
 
 ## Example Usage (Local)
 

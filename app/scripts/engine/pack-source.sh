@@ -11,8 +11,10 @@ echo "==> Packing source cache into $IMAGE_NAME (Iterative Layering)..."
 
 if docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
     IMAGE_EXISTS=1
+    EXISTING_CACHE_FILES=$(docker run --rm --entrypoint ls "$IMAGE_NAME" /cache 2>/dev/null || true)
 else
     IMAGE_EXISTS=0
+    EXISTING_CACHE_FILES=""
 fi
 
 if [ ! -d "source/main" ]; then
@@ -29,6 +31,8 @@ HASH_AFTER=$(git -C source/main rev-parse HEAD 2>/dev/null || echo "nohash")
 
 CHANGED=0
 if [ "$IMAGE_EXISTS" -eq 0 ]; then
+    CHANGED=1
+elif ! echo "$EXISTING_CACHE_FILES" | grep -F -x -q "source-main.tar.zst.enc"; then
     CHANGED=1
 elif [ "$HASH_BEFORE" != "$HASH_AFTER" ]; then
     CHANGED=1
