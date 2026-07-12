@@ -2,7 +2,14 @@
 
 A robust, containerized builder for compiling custom OpenWrt firmware. It keeps your custom configuration separate from the upstream source, allowing you to easily update base versions without dealing with massive git conflicts.
 
-For a deeper overview of the architecture and design, please read [design.md](design.md).
+For a deeper overview of the architecture and comprehensive implementation details, please read [design.md](design.md).
+
+## Key Features
+
+- **Official Package ABI Compatibility (`vermagic` Override):** Set `vermagic = "<hash>"` in `profile.toml` to align your kernel module hash with official OpenWrt/ImmortalWrt release snapshots. The build engine automatically intercepts kernel Makefile generation and purges stale out-of-tree kmod packages on incremental builds so official repository `kmod-*` packages install cleanly without `kernel=...` dependency mismatch errors.
+- **Upstream Source Pinning (`tag` / `commit` / `branch`):** Pin device profiles to specific release tags (`tag = "v23.05.5"`), exact commit SHAs (`commit = "..."`), or tracking branches (`branch = "..."`). All profiles share a single lightweight object store with detached git worktrees.
+- **Log & Package Name Obfuscation (`--obfuscate`):** Pass `--obfuscate` to redact sensitive package names, feed URLs, and directory paths (`***`) on public console stdout while writing complete unredacted diagnostic logs (`setup.log`, `download.log`, `build.log`) to encrypted archives.
+- **Strict Feed Priorities & Dynamic Overlay Assembly:** Enforce custom feed priorities (`extra_feeds`) over upstream defaults and freshly inject profile overlay files (`files/`) on every build run.
 
 ## Quick Start (Local Build)
 

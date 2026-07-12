@@ -1,7 +1,8 @@
 services:
   builder:
-    build: ./app
-    image: firmware-builder:latest
+    build: .
+    image: owrt-fw-builder:latest
+    container_name: owrt-fw-builder
     user: "${UID:-1000}:${GID:-1000}"
     volumes:
       - ./profiles:/builder/profiles:rw

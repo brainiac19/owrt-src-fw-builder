@@ -4,3 +4,4 @@
 /.ccache/
 /docker-image.tar
 /profiles/
+__pycache__/

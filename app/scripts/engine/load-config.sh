@@ -47,6 +47,22 @@ if [ "$USE_CCACHE" = "1" ]; then
     echo "CONFIG_CCACHE_DIR=\"/builder/ccache\"" >> "$WORKTREE_DIR/.config"
 fi
 
+export OVERRIDE_VERMAGIC
+OVERRIDE_VERMAGIC=$(python3 -c '
+import sys
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
+with open(sys.argv[1], "rb") as f:
+    print(tomllib.load(f).get("vermagic", ""))
+' "$PROFILE_DIR/profile.toml" || true)
+
+if [ -n "$OVERRIDE_VERMAGIC" ]; then
+    echo "==> Vermagic override enabled: $OVERRIDE_VERMAGIC"
+    echo "    Official kmod packages will be installable on this custom kernel."
+fi
+
 echo "==> Running Pass 1 defconfig..."
 cd "$WORKTREE_DIR"
 make defconfig

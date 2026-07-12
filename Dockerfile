@@ -23,8 +23,8 @@ RUN mkdir -p /builder/ccache /builder/dl /builder/artifacts /builder/uci-default
     chmod 1777 /builder/ccache /builder/dl /builder/artifacts /builder/uci-defaults-extra
 
 # Embed defaults and scripts
-COPY scripts/ /app/scripts/
-COPY shared/ /app/shared/
+COPY /app/scripts/ /app/scripts/
+COPY /app/shared/ /app/shared/
 
 # Symlink builder to /usr/local/bin for global access
 RUN ln -s /app/scripts/builder /usr/local/bin/builder

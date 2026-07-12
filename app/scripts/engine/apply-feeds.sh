@@ -24,4 +24,4 @@ with open(sys.argv[2], "w") as out:
 ' "$PROFILE_DIR/profile.toml" "$WORKTREE_DIR/feeds.conf"
 
 cd "$WORKTREE_DIR"
-./scripts/feeds update -a
+./scripts/feeds update -a 2>&1 | python3 "$BUILDER_ROOT/scripts/engine/filter_logs.py"

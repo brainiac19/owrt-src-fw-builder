@@ -11,8 +11,18 @@ profile_dir = sys.argv[1]
 with open(os.path.join(profile_dir, "profile.toml"), "rb") as f:
     config = tomllib.load(f)
 
+tag = config.get('tag', '')
+commit = config.get('commit', '')
+pin_str = f" (pinned: {tag or commit})" if (tag or commit) else ""
+repo_name = config.get('repo', 'Unknown').split('/')[-1].replace('.git', '')
+branch = config.get('branch', 'Unknown')
+
 print(f"Profile : {config.get('display_name', 'Unknown')}")
-print(f"Source  : {config.get('repo', 'Unknown').split('/')[-1].replace('.git', '')} @ {config.get('branch', 'Unknown')}")
+print(f"Source  : {repo_name} @ {branch}{pin_str}")
+
+vermagic = config.get('vermagic', '')
+if vermagic:
+    print(f"Vermagic: {vermagic}  ⚠ ABI override active")
 print("")
 
 print("┌─ Target")
