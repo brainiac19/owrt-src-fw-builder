@@ -1,8 +1,8 @@
 services:
   builder:
     build: .
-    image: owrt-fw-builder:latest
-    container_name: owrt-fw-builder
+    image: owrt-src-fw-builder:latest
+    container_name: owrt-src-fw-builder
     user: "${UID:-1000}:${GID:-1000}"
     volumes:
       - ./profiles:/builder/profiles:rw

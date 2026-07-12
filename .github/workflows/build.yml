@@ -152,9 +152,9 @@ jobs:
       - name: Build Docker Image (with layer cache)
         uses: docker/build-push-action@v6
         with:
-          context: ./app
+          context: .
           load: true           # make the image available to the local daemon
-          tags: firmware-builder:latest
+          tags: owrt-src-fw-builder:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
